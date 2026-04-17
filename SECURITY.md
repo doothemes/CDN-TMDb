@@ -80,12 +80,13 @@ Las imagenes se sirven con `Cache-Control: public, max-age=2592000, immutable`. 
 | Almacenar contenido no-imagen | Validacion de `Content-Type: image/*` antes de escribir a disco |
 | Fuerza bruta en API key | `hash_equals()` previene timing attacks |
 | Hotlinking desde sitios no autorizados | Reglas anti-hotlink en `.htaccess` (activar en produccion) |
-| Consumo de disco excesivo | Endpoint `/cleaner` para limpieza manual o por antiguedad |
+| Consumo de disco excesivo | Endpoint `/cleaner` + `cron.php` para limpieza manual, programada o por antiguedad |
+| Credenciales expuestas en repo | `.env` excluido via `.gitignore`, solo se commitea `.env.example` sin valores reales |
 | XSS via SVG malicioso | El CDN solo almacena SVGs descargados de TMDB (origen confiable), no acepta uploads de usuarios |
 
 ## Recomendaciones para produccion
 
-1. **Cambiar `API_SECRET`** — el valor por defecto no es seguro
+1. **Configurar `API_SECRET` en `.env`** — sin esta clave los endpoints admin rechazan todas las peticiones
 2. **Activar anti-hotlink** — descomentar las reglas en `.htaccess` y listar solo los dominios autorizados
 3. **HTTPS obligatorio** — configurar redireccion HTTP → HTTPS a nivel de servidor
 4. **Monitorear disco** — ejecutar `/get_stats` periodicamente y programar limpiezas con `/cleaner`

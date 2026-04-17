@@ -15,9 +15,13 @@ Despues de la primera descarga, Apache sirve las imagenes como archivos estatico
 ```
 cdn.dbmvs/
 ├── .htaccess       # Rewrite rules + cache + anti-hotlink
+├── .env.example    # Template de configuracion
+├── .env            # Variables de entorno (no se commitea)
+├── .gitattributes  # Normaliza line endings y controla exports
+├── .gitignore      # Excluye /t/ y .env del repositorio
+├── env.php         # Loader de variables de entorno
 ├── index.php       # Proxy + endpoints administrativos
 ├── cron.php        # Tarea programada para limpieza automatica
-├── .gitignore      # Excluye /t/ del repositorio
 └── t/              # Imagenes almacenadas (se crea automaticamente)
     └── p/
         ├── w500/
@@ -93,15 +97,29 @@ ExpiresByType image/svg+xml "access plus 1 year"
 
 Cache de **1 ano** para todos los tipos de imagen que maneja el CDN. Es seguro porque las imagenes de TMDB son inmutables — si el contenido cambia, el hash del nombre de archivo cambia tambien.
 
-## Configuracion
+## Instalacion
 
-### Clave secreta
+1. Clonar o descargar el repositorio en el document root del dominio
+2. Copiar el template de configuracion:
+   ```bash
+   cp .env.example .env
+   ```
+3. Editar `.env` con los valores de produccion:
+   ```env
+   API_SECRET=tu-clave-secreta-aqui
+   MAX_INACTIVE_DAYS=30
+   ```
+4. Verificar que Apache tenga `mod_rewrite` y `mod_expires` habilitados
+5. (Opcional) Programar `cron.php` en crontab para limpieza automatica
 
-Editar la constante `API_SECRET` en `index.php` antes de desplegar a produccion:
+## Configuracion (.env)
 
-```php
-define('API_SECRET', 'tu-clave-secreta-aqui');
-```
+Toda la configuracion se gestiona desde el archivo `.env` en la raiz del proyecto. El archivo `env.php` se encarga de leer las variables y exponerlas via la funcion `env()`.
+
+| Variable | Descripcion | Default |
+|----------|-------------|---------|
+| `API_SECRET` | Clave secreta para endpoints administrativos (`get_stats`, `cleaner`) | *(vacio)* |
+| `MAX_INACTIVE_DAYS` | Dias maximos sin acceso antes de que el cron elimine una imagen | `30` |
 
 ### Anti-hotlink
 
@@ -191,10 +209,10 @@ Script de limpieza automatica que se ejecuta desde la linea de comandos. Elimina
 
 ### Configuracion
 
-Editar la constante `MAX_INACTIVE_DAYS` en `cron.php` para definir el umbral de inactividad:
+El umbral de inactividad se configura en `.env`:
 
-```php
-define('MAX_INACTIVE_DAYS', 30);  // Eliminar imagenes sin acceso en 30 dias
+```env
+MAX_INACTIVE_DAYS=30
 ```
 
 El script usa `fileatime()` (ultimo acceso del sistema operativo) para determinar cuando fue la ultima vez que se consulto una imagen. Si el filesystem no soporta atime, usa `filemtime()` (fecha de descarga) como fallback.
