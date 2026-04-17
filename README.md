@@ -16,6 +16,7 @@ Despues de la primera descarga, Apache sirve las imagenes como archivos estatico
 cdn.dbmvs/
 ├── .htaccess       # Rewrite rules + cache + anti-hotlink
 ├── index.php       # Proxy + endpoints administrativos
+├── cron.php        # Tarea programada para limpieza automatica
 ├── .gitignore      # Excluye /t/ del repositorio
 └── t/              # Imagenes almacenadas (se crea automaticamente)
     └── p/
@@ -183,6 +184,63 @@ Respuesta:
 | `days` | Dias de antiguedad (solo en modo `older_than`) |
 | `deleted_files` | Numero de imagenes eliminadas |
 | `deleted_folders` | Numero de carpetas vacias eliminadas |
+
+## Tarea CRON (cron.php)
+
+Script de limpieza automatica que se ejecuta desde la linea de comandos. Elimina imagenes que no han sido consultadas en un periodo de tiempo configurable y limpia las carpetas vacias que queden huerfanas.
+
+### Configuracion
+
+Editar la constante `MAX_INACTIVE_DAYS` en `cron.php` para definir el umbral de inactividad:
+
+```php
+define('MAX_INACTIVE_DAYS', 30);  // Eliminar imagenes sin acceso en 30 dias
+```
+
+El script usa `fileatime()` (ultimo acceso del sistema operativo) para determinar cuando fue la ultima vez que se consulto una imagen. Si el filesystem no soporta atime, usa `filemtime()` (fecha de descarga) como fallback.
+
+### Ejecucion manual
+
+```bash
+php /ruta/al/cdn.dbmvs/cron.php
+```
+
+### Programar en crontab
+
+```bash
+# Ejecutar todos los dias a las 3:00 AM
+0 3 * * * php /ruta/al/cdn.dbmvs/cron.php >> /var/log/cdn-cleanup.log 2>&1
+
+# Ejecutar cada lunes a las 2:00 AM
+0 2 * * 1 php /ruta/al/cdn.dbmvs/cron.php >> /var/log/cdn-cleanup.log 2>&1
+```
+
+### Salida del reporte
+
+Cada ejecucion genera un reporte con timestamp para los logs:
+
+```
+[03:00:01] Iniciando limpieza del CDN...
+[03:00:01] Eliminando imagenes sin acceso en los ultimos 30 dias.
+[03:00:01] Fecha limite: 2026-03-18 03:00:01
+[03:00:01] --------------------------------------------------
+[03:00:01] --------------------------------------------------
+[03:00:01] Limpieza completada: 2026-04-17 03:00:01
+[03:00:01]   Archivos eliminados:  87 (124.5 MB liberados)
+[03:00:01]   Carpetas eliminadas:  2
+[03:00:01]   Archivos conservados: 953
+```
+
+| Campo | Descripcion |
+|-------|-------------|
+| Archivos eliminados | Imagenes que superaron el umbral de inactividad (con espacio liberado) |
+| Carpetas eliminadas | Directorios vacios que quedaron huerfanos tras la limpieza |
+| Archivos conservados | Imagenes que aun estan dentro del periodo de actividad |
+
+### Seguridad
+
+- Solo se puede ejecutar desde CLI (`php_sapi_name() === 'cli'`). Si se intenta acceder via web, devuelve `403 Forbidden`
+- No requiere API key porque el acceso al servidor ya implica autorizacion
 
 ## Seguridad
 
