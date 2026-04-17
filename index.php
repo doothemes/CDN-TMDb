@@ -18,12 +18,14 @@
 
 // ─── Configuracion ──────────────────────────────────────────────
 
+require_once __DIR__ . '/env.php';
+
 /**
  * Clave secreta para proteger los endpoints administrativos (get_stats, cleaner).
  * Se valida contra el header X-Api-Key en cada peticion a estos endpoints.
- * Cambiar este valor en produccion por una clave segura.
+ * Configurar en .env: API_SECRET=tu-clave-secreta
  */
-define('API_SECRET', 'cambiar-esta-clave-en-produccion');
+define('API_SECRET', env('API_SECRET', ''));
 
 /**
  * Host origen de las imagenes de TMDB.

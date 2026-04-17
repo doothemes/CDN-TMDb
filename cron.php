@@ -21,10 +21,13 @@ if (php_sapi_name() !== 'cli') {
 
 // ─── Configuracion ──────────────────────────────────────────────
 
+require_once __DIR__ . '/env.php';
+
 /**
  * Numero maximo de dias que una imagen puede permanecer en disco
  * sin ser consultada. Si el ultimo acceso supera este limite,
  * la imagen se elimina automaticamente.
+ * Configurar en .env: MAX_INACTIVE_DAYS=30
  *
  * El "ultimo acceso" se determina con fileatime() (access time del SO).
  * Para que funcione correctamente, el filesystem del servidor debe tener
@@ -34,7 +37,7 @@ if (php_sapi_name() !== 'cli') {
  * Si el SO no soporta atime, se usa filemtime() como fallback
  * (fecha de descarga/modificacion).
  */
-define('MAX_INACTIVE_DAYS', 30);
+define('MAX_INACTIVE_DAYS', (int) env('MAX_INACTIVE_DAYS', 30));
 
 /**
  * Directorio raiz del CDN donde se almacenan las imagenes.
