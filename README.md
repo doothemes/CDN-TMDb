@@ -51,6 +51,47 @@ https://cdn.dbmvs.io/t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg
   Cliente → Apache (archivo existe) → sirve directo como estatico (PHP no se ejecuta)
 ```
 
+## .htaccess
+
+El archivo `.htaccess` tiene tres bloques funcionales:
+
+### Rewrite (mod_rewrite)
+
+Controla el flujo principal del CDN. Si el archivo solicitado ya existe fisicamente en disco, Apache lo sirve como estatico sin tocar PHP. Solo cuando el archivo **no existe** (primera peticion de esa imagen) se enruta a `index.php` para descargarlo de TMDB.
+
+```apache
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+```
+
+### Anti-hotlink
+
+Bloquea el uso de las imagenes desde dominios no autorizados. Viene **desactivado por defecto** (lineas comentadas con `###`). Cuando se activa, funciona asi:
+
+1. Si el `Referer` esta vacio → permite (acceso directo, apps, bots)
+2. Si el `Referer` coincide con un dominio permitido → permite
+3. Si no coincide con ninguno → devuelve `403 Forbidden`
+
+Las condiciones son AND: **todas** deben fallar para que se aplique el bloqueo. Para agregar un dominio permitido, anadir una linea:
+
+```apache
+RewriteCond %{HTTP_REFERER} !^https?://(www\.)?tudominio\.com [NC]
+```
+
+### Cache de navegador (mod_expires)
+
+Configura cache a nivel de Apache para los archivos estaticos que se sirven sin pasar por PHP. Esto complementa los headers `Cache-Control` que `index.php` envia durante la primera descarga.
+
+```apache
+ExpiresByType image/jpeg "access plus 1 year"
+ExpiresByType image/png "access plus 1 year"
+ExpiresByType image/webp "access plus 1 year"
+ExpiresByType image/svg+xml "access plus 1 year"
+```
+
+Cache de **1 ano** para todos los tipos de imagen que maneja el CDN. Es seguro porque las imagenes de TMDB son inmutables — si el contenido cambia, el hash del nombre de archivo cambia tambien.
+
 ## Configuracion
 
 ### Clave secreta
