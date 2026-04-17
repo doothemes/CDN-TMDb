@@ -95,4 +95,4 @@ Las imagenes se sirven con `Cache-Control: public, max-age=2592000, immutable`. 
 
 ## Reportar vulnerabilidades
 
-Si encuentras una vulnerabilidad de seguridad, reportala directamente a **emeza@ews.pe** antes de divulgarla publicamente.
+Si encuentras una vulnerabilidad de seguridad, reportala directamente a **doothemes@ews.pe** antes de divulgarla publicamente.
