@@ -17,5 +17,6 @@ LICENSE.md text eol=lf
 .gitattributes text eol=lf
 
 # Exportar: excluir del zip de release (gh release, git archive)
+*.md export-ignore
 .gitignore export-ignore
 .gitattributes export-ignore
