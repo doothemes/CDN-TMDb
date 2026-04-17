@@ -1,0 +1,43 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # =================================================================
+    # PROTECCION ANTI-HOTLINK (Bloquear dominios no autorizados)
+    # =================================================================
+    # Descomenta las reglas cuando vayas a produccion.
+    # Las RewriteCond son AND entre si: si el referer NO esta vacio
+    # Y NO coincide con ningun dominio permitido, se bloquea.
+
+    # 1. Permitir referers vacios (acceso directo en navegador, apps, bots)
+    ###RewriteCond %{HTTP_REFERER} !^$
+
+    # 2. Dominios permitidos [NC = case-insensitive]
+    ###RewriteCond %{HTTP_REFERER} !^https?://(www\.)?doothemes\.com [NC]
+    ###RewriteCond %{HTTP_REFERER} !^https?://(www\.)?dbmvs\.com [NC]
+    ###RewriteCond %{HTTP_REFERER} !^https?://(demo\.)?wovie\.co [NC]
+
+    # 3. Desarrollo local
+    ###RewriteCond %{HTTP_REFERER} !^https?://localhost [NC]
+    ###RewriteCond %{HTTP_REFERER} !^https?://127\.0\.0\.1 [NC]
+
+    # 4. Bloquear: devuelve 403 Forbidden en imagenes no autorizadas
+    ###RewriteRule \.(jpg|jpeg|png|webp|svg)$ - [F,NC,L]
+
+    # =================================================================
+
+    # Si el archivo existe en disco, Apache lo sirve directo (no toca PHP)
+    # Solo entra a index.php cuando la imagen aun no ha sido descargada
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^ index.php [QSA,L]
+</IfModule>
+
+# Cache de navegador para archivos estaticos servidos por Apache
+# (complementa los headers que index.php envia en la primera descarga)
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType image/jpeg "access plus 1 year"
+    ExpiresByType image/png "access plus 1 year"
+    ExpiresByType image/webp "access plus 1 year"
+    ExpiresByType image/svg+xml "access plus 1 year"
+</IfModule>
