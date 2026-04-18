@@ -1,28 +1,28 @@
 # CDN Proxy — TMDB Images
 
-Proxy inverso con almacenamiento permanente para imagenes de [The Movie Database](https://www.themoviedb.org/). Descarga las imagenes desde `image.tmdb.org`, las almacena en disco y las sirve desde tu propio dominio.
+Proxy inverso con almacenamiento permanente para imágenes de [The Movie Database](https://www.themoviedb.org/). Descarga las imágenes desde `image.tmdb.org`, las almacena en disco y las sirve desde tu propio dominio.
 
-Despues de la primera descarga, Apache sirve las imagenes como archivos estaticos — PHP no interviene.
+Después de la primera descarga, Apache sirve las imágenes como archivos estáticos — PHP no interviene.
 
 ## Requisitos
 
 - PHP 8.1+
 - Apache con `mod_rewrite` y `mod_expires`
-- Extension `curl` habilitada
+- Extensión `curl` habilitada
 
 ## Estructura
 
 ```
 cdn.dbmvs/
 ├── .htaccess       # Rewrite rules + cache + anti-hotlink
-├── .env.example    # Template de configuracion
+├── .env.example    # Template de configuración
 ├── .env            # Variables de entorno (no se commitea)
 ├── .gitattributes  # Normaliza line endings y controla exports
 ├── .gitignore      # Excluye /t/ y .env del repositorio
 ├── env.php         # Loader de variables de entorno
 ├── index.php       # Proxy + endpoints administrativos
-├── cron.php        # Tarea programada para limpieza automatica
-└── t/              # Imagenes almacenadas (se crea automaticamente)
+├── cron.php        # Tarea programada para limpieza automática
+└── t/              # Imágenes almacenadas (se crea automáticamente)
     └── p/
         ├── w500/
         ├── w780/
@@ -38,7 +38,7 @@ Reemplaza el host de TMDB por el de tu CDN:
 # Antes (directo a TMDB)
 https://image.tmdb.org/t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg
 
-# Despues (tu CDN)
+# Después (tu CDN)
 https://cdn.dbmvs.io/t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg
 ```
 
@@ -46,14 +46,14 @@ https://cdn.dbmvs.io/t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg
 <img src="https://cdn.dbmvs.io/t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg" alt="Poster">
 ```
 
-### Flujo de una peticion
+### Flujo de una petición
 
 ```
-1ra peticion:
+1ra petición:
   Cliente → Apache (no existe en disco) → index.php → descarga de TMDB → guarda en /t/p/w500/ → responde
 
-2da peticion en adelante:
-  Cliente → Apache (archivo existe) → sirve directo como estatico (PHP no se ejecuta)
+2da petición en adelante:
+  Cliente → Apache (archivo existe) → sirve directo como estático (PHP no se ejecuta)
 ```
 
 ## .htaccess
@@ -62,7 +62,7 @@ El archivo `.htaccess` tiene tres bloques funcionales:
 
 ### Rewrite (mod_rewrite)
 
-Controla el flujo principal del CDN. Si el archivo solicitado ya existe fisicamente en disco, Apache lo sirve como estatico sin tocar PHP. Solo cuando el archivo **no existe** (primera peticion de esa imagen) se enruta a `index.php` para descargarlo de TMDB.
+Controla el flujo principal del CDN. Si el archivo solicitado ya existe físicamente en disco, Apache lo sirve como estático sin tocar PHP. Sólo cuando el archivo **no existe** (primera petición de esa imagen) se enruta a `index.php` para descargarlo de TMDB.
 
 ```apache
 RewriteCond %{REQUEST_FILENAME} !-f
@@ -72,21 +72,21 @@ RewriteRule ^ index.php [QSA,L]
 
 ### Anti-hotlink
 
-Bloquea el uso de las imagenes desde dominios no autorizados. Viene **desactivado por defecto** (lineas comentadas con `###`). Cuando se activa, funciona asi:
+Bloquea el uso de las imágenes desde dominios no autorizados. Viene **desactivado por defecto** (líneas comentadas con `###`). Cuando se activa, funciona así:
 
-1. Si el `Referer` esta vacio → permite (acceso directo, apps, bots)
+1. Si el `Referer` está vacío → permite (acceso directo, apps, bots)
 2. Si el `Referer` coincide con un dominio permitido → permite
 3. Si no coincide con ninguno → devuelve `403 Forbidden`
 
-Las condiciones son AND: **todas** deben fallar para que se aplique el bloqueo. Para agregar un dominio permitido, anadir una linea:
+Las condiciones son AND: **todas** deben fallar para que se aplique el bloqueo. Para agregar un dominio permitido, añadir una línea:
 
 ```apache
 RewriteCond %{HTTP_REFERER} !^https?://(www\.)?tudominio\.com [NC]
 ```
 
-### Cache de navegador (mod_expires)
+### Caché de navegador (mod_expires)
 
-Configura cache a nivel de Apache para los archivos estaticos que se sirven sin pasar por PHP. Esto complementa los headers `Cache-Control` que `index.php` envia durante la primera descarga.
+Configura caché a nivel de Apache para los archivos estáticos que se sirven sin pasar por PHP. Esto complementa los headers `Cache-Control` que `index.php` envía durante la primera descarga.
 
 ```apache
 ExpiresByType image/jpeg "access plus 1 year"
@@ -95,35 +95,35 @@ ExpiresByType image/webp "access plus 1 year"
 ExpiresByType image/svg+xml "access plus 1 year"
 ```
 
-Cache de **1 ano** para todos los tipos de imagen que maneja el CDN. Es seguro porque las imagenes de TMDB son inmutables — si el contenido cambia, el hash del nombre de archivo cambia tambien.
+Caché de **1 año** para todos los tipos de imagen que maneja el CDN. Es seguro porque las imágenes de TMDB son inmutables — si el contenido cambia, el hash del nombre de archivo cambia también.
 
-## Instalacion
+## Instalación
 
 1. Clonar o descargar el repositorio en el document root del dominio
-2. Copiar el template de configuracion:
+2. Copiar el template de configuración:
    ```bash
    cp .env.example .env
    ```
-3. Editar `.env` con los valores de produccion:
+3. Editar `.env` con los valores de producción:
    ```env
    API_SECRET=tu-clave-secreta-aqui
    MAX_INACTIVE_DAYS=30
    ```
 4. Verificar que Apache tenga `mod_rewrite` y `mod_expires` habilitados
-5. (Opcional) Programar `cron.php` en crontab para limpieza automatica
+5. (Opcional) Programar `cron.php` en crontab para limpieza automática
 
-## Configuracion (.env)
+## Configuración (.env)
 
-Toda la configuracion se gestiona desde el archivo `.env` en la raiz del proyecto. El archivo `env.php` se encarga de leer las variables y exponerlas via la funcion `env()`.
+Toda la configuración se gestiona desde el archivo `.env` en la raíz del proyecto. El archivo `env.php` se encarga de leer las variables y exponerlas vía la función `env()`.
 
-| Variable | Descripcion | Default |
+| Variable | Descripción | Default |
 |----------|-------------|---------|
-| `API_SECRET` | Clave secreta para endpoints administrativos (`get_stats`, `cleaner`) | *(vacio)* |
-| `MAX_INACTIVE_DAYS` | Dias maximos sin acceso antes de que el cron elimine una imagen | `30` |
+| `API_SECRET` | Clave secreta para endpoints administrativos (`get_stats`, `cleaner`) | *(vacío)* |
+| `MAX_INACTIVE_DAYS` | Días máximos sin acceso antes de que el cron elimine una imagen | `30` |
 
 ### Anti-hotlink
 
-El `.htaccess` incluye reglas de proteccion anti-hotlink comentadas. Para activarlas, descomentar las lineas `###` y ajustar los dominios permitidos:
+El `.htaccess` incluye reglas de protección anti-hotlink comentadas. Para activarlas, descomentar las líneas `###` y ajustar los dominios permitidos:
 
 ```apache
 RewriteCond %{HTTP_REFERER} !^$
@@ -137,7 +137,7 @@ Todos los endpoints requieren el header `X-Api-Key` con el valor de `API_SECRET`
 
 ### GET /get_stats
 
-Devuelve estadisticas de almacenamiento del CDN.
+Devuelve estadísticas de almacenamiento del CDN.
 
 ```bash
 curl -H "X-Api-Key: tu-clave-secreta" https://cdn.dbmvs.io/get_stats
@@ -156,18 +156,18 @@ Respuesta:
 }
 ```
 
-| Campo | Descripcion |
+| Campo | Descripción |
 |-------|-------------|
-| `folders` | Numero total de carpetas dentro de `/t/` |
-| `files` | Numero total de imagenes almacenadas |
+| `folders` | Número total de carpetas dentro de `/t/` |
+| `files` | Número total de imágenes almacenadas |
 | `size.bytes` | Espacio en disco en bytes |
 | `size.human` | Espacio en disco en formato legible |
 
 ### POST /cleaner
 
-Ejecuta limpieza de imagenes almacenadas. Soporta dos modos:
+Ejecuta limpieza de imágenes almacenadas. Soporta dos modos:
 
-**Limpieza total** — elimina todas las imagenes y carpetas:
+**Limpieza total** — elimina todas las imágenes y carpetas:
 
 ```bash
 curl -X POST \
@@ -176,7 +176,7 @@ curl -X POST \
   https://cdn.dbmvs.io/cleaner
 ```
 
-**Limpieza por antiguedad** — elimina archivos con mas de X dias desde su descarga:
+**Limpieza por antigüedad** — elimina archivos con más de X días desde su descarga:
 
 ```bash
 curl -X POST \
@@ -196,18 +196,18 @@ Respuesta:
 }
 ```
 
-| Campo | Descripcion |
+| Campo | Descripción |
 |-------|-------------|
 | `mode` | Modo de limpieza ejecutado (`all` o `older_than`) |
-| `days` | Dias de antiguedad (solo en modo `older_than`) |
-| `deleted_files` | Numero de imagenes eliminadas |
-| `deleted_folders` | Numero de carpetas vacias eliminadas |
+| `days` | Días de antigüedad (sólo en modo `older_than`) |
+| `deleted_files` | Número de imágenes eliminadas |
+| `deleted_folders` | Número de carpetas vacías eliminadas |
 
 ## Tarea CRON (cron.php)
 
-Script de limpieza automatica que se ejecuta desde la linea de comandos. Elimina imagenes que no han sido consultadas en un periodo de tiempo configurable y limpia las carpetas vacias que queden huerfanas.
+Script de limpieza automática que se ejecuta desde la línea de comandos. Elimina imágenes que no han sido consultadas en un período de tiempo configurable y limpia las carpetas vacías que queden huérfanas.
 
-### Configuracion
+### Configuración
 
 El umbral de inactividad se configura en `.env`:
 
@@ -215,9 +215,9 @@ El umbral de inactividad se configura en `.env`:
 MAX_INACTIVE_DAYS=30
 ```
 
-El script usa `fileatime()` (ultimo acceso del sistema operativo) para determinar cuando fue la ultima vez que se consulto una imagen. Si el filesystem no soporta atime, usa `filemtime()` (fecha de descarga) como fallback.
+El script usa `fileatime()` (último acceso del sistema operativo) para determinar cuándo fue la última vez que se consultó una imagen. Si el filesystem no soporta atime, usa `filemtime()` (fecha de descarga) como fallback.
 
-### Ejecucion manual
+### Ejecución manual
 
 ```bash
 php /ruta/al/cdn.dbmvs/cron.php
@@ -226,7 +226,7 @@ php /ruta/al/cdn.dbmvs/cron.php
 ### Programar en crontab
 
 ```bash
-# Ejecutar todos los dias a las 3:00 AM
+# Ejecutar todos los días a las 3:00 AM
 0 3 * * * php /ruta/al/cdn.dbmvs/cron.php >> /var/log/cdn-cleanup.log 2>&1
 
 # Ejecutar cada lunes a las 2:00 AM
@@ -235,12 +235,12 @@ php /ruta/al/cdn.dbmvs/cron.php
 
 ### Salida del reporte
 
-Cada ejecucion genera un reporte con timestamp para los logs:
+Cada ejecución genera un reporte con timestamp para los logs:
 
 ```
 [03:00:01] Iniciando limpieza del CDN...
-[03:00:01] Eliminando imagenes sin acceso en los ultimos 30 dias.
-[03:00:01] Fecha limite: 2026-03-18 03:00:01
+[03:00:01] Eliminando imágenes sin acceso en los últimos 30 días.
+[03:00:01] Fecha límite: 2026-03-18 03:00:01
 [03:00:01] --------------------------------------------------
 [03:00:01] --------------------------------------------------
 [03:00:01] Limpieza completada: 2026-04-17 03:00:01
@@ -249,32 +249,32 @@ Cada ejecucion genera un reporte con timestamp para los logs:
 [03:00:01]   Archivos conservados: 953
 ```
 
-| Campo | Descripcion |
+| Campo | Descripción |
 |-------|-------------|
-| Archivos eliminados | Imagenes que superaron el umbral de inactividad (con espacio liberado) |
-| Carpetas eliminadas | Directorios vacios que quedaron huerfanos tras la limpieza |
-| Archivos conservados | Imagenes que aun estan dentro del periodo de actividad |
+| Archivos eliminados | Imágenes que superaron el umbral de inactividad (con espacio liberado) |
+| Carpetas eliminadas | Directorios vacíos que quedaron huérfanos tras la limpieza |
+| Archivos conservados | Imágenes que aún están dentro del período de actividad |
 
 ### Seguridad
 
-- Solo se puede ejecutar desde CLI (`php_sapi_name() === 'cli'`). Si se intenta acceder via web, devuelve `403 Forbidden`
-- No requiere API key porque el acceso al servidor ya implica autorizacion
+- Sólo se puede ejecutar desde CLI (`php_sapi_name() === 'cli'`). Si se intenta acceder vía web, devuelve `403 Forbidden`
+- No requiere API key porque el acceso al servidor ya implica autorización
 
 ## Seguridad
 
-- **Validacion de paths**: regex estricto que solo acepta `/t/p/{size}/{hash}.{ext}` — previene path traversal y SSRF
-- **Extensiones limitadas**: solo `jpg`, `jpeg`, `png`, `webp`, `svg`
-- **Validacion de Content-Type**: verifica que TMDB devuelva `image/*` antes de almacenar
-- **Anti-hotlink**: proteccion configurable por dominio via `.htaccess`
+- **Validación de paths**: regex estricto que sólo acepta `/t/p/{size}/{hash}.{ext}` — previene path traversal y SSRF
+- **Extensiones limitadas**: sólo `jpg`, `jpeg`, `png`, `webp`, `svg`
+- **Validación de Content-Type**: verifica que TMDB devuelva `image/*` antes de almacenar
+- **Anti-hotlink**: protección configurable por dominio vía `.htaccess`
 - **API protegida**: endpoints admin requieren `X-Api-Key` validado con `hash_equals()` (resistente a timing attacks)
-- **CORS**: `Access-Control-Allow-Origin: *` habilitado para uso en multiples dominios
+- **CORS**: `Access-Control-Allow-Origin: *` habilitado para uso en múltiples dominios
 
-## Headers de cache
+## Headers de caché
 
-| Header | Valor | Proposito |
+| Header | Valor | Propósito |
 |--------|-------|-----------|
-| `Cache-Control` | `public, max-age=2592000, immutable` | Cache del navegador por 30 dias |
-| `ETag` | MD5 del archivo | Validacion condicional (304 Not Modified) |
-| `Last-Modified` | Fecha de descarga | Validacion condicional alternativa |
-| `X-Cache` | `HIT` | Indica que la imagen se sirvio desde el CDN |
+| `Cache-Control` | `public, max-age=2592000, immutable` | Caché del navegador por 30 días |
+| `ETag` | MD5 del archivo | Validación condicional (304 Not Modified) |
+| `Last-Modified` | Fecha de descarga | Validación condicional alternativa |
+| `X-Cache` | `HIT` | Indica que la imagen se sirvió desde el CDN |
 | `Access-Control-Allow-Origin` | `*` | Permite uso cross-origin |
