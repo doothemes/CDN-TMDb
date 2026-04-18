@@ -91,6 +91,10 @@ Registro histórico de la deuda técnica del proyecto. Documenta tanto lo que se
 **Problema:** GitHub detecta licencias estándar mejor con el nombre convencional.
 **Solución:** `git mv LICENSE.md LICENSE`.
 
+#### 22. Pérdida irreversible de imágenes huérfanas
+**Problema:** TMDB elimina imágenes de su catálogo periódicamente (contenido retirado, cambios de distribución). Una vez eliminadas del origen, las ejecuciones de `cleaner` o `cron.php` podían borrarlas del CDN sin posibilidad de recuperación.
+**Solución:** Protección archival automática. Antes de eliminar, se hace HEAD a TMDB — si responde 404/410, se marca con un sibling `.archival` y se preserva permanentemente. El HEAD solo ocurre durante limpieza (nunca afecta el serving) y una vez marcada, las siguientes rondas la saltan sin re-verificar. El endpoint `/cleaner` acepta `force: true` para casos donde realmente se necesita purgar todo (ej: migración de servidor).
+
 #### 21. Logs sin límite de tamaño
 **Problema:** `audit.log` y `error.log` crecían indefinidamente. En entornos con muchos errores de cURL o limpiezas frecuentes, podían llegar a consumir GBs de disco.
 **Solución:** Rotación automática en `log_line()` — cuando un archivo supera `LOG_MAX_SIZE_MB` (default 5 MB), se rota a `.1`, la antigua `.1` pasa a `.2`, y así sucesivamente hasta `LOG_KEEP_FILES` (default 5). La rotación más antigua se elimina. Espacio máximo garantizado por log: **25 MB**.

@@ -163,6 +163,7 @@ Respuesta:
     "version": "1.1.0",
     "folders": 3,
     "files": 1240,
+    "archival": 5,
     "size": {
         "bytes": 52428800,
         "human": "50 MB"
@@ -175,6 +176,7 @@ Respuesta:
 | `version` | Versión actual del CDN desplegado |
 | `folders` | Número total de carpetas dentro de `/t/` |
 | `files` | Número total de imágenes almacenadas |
+| `archival` | Subconjunto de `files` protegidas como archival (TMDB ya no las tiene) |
 | `size.bytes` | Espacio en disco en bytes |
 | `size.human` | Espacio en disco en formato legible |
 
@@ -200,13 +202,24 @@ curl -X POST \
   https://cdn.dbmvs.io/cleaner
 ```
 
+**Limpieza forzada** — ignora protección archival y elimina **absolutamente todo**:
+
+```bash
+curl -X POST \
+  -H "X-Api-Key: tu-clave-secreta" \
+  -d '{"mode": "all", "force": true}' \
+  https://cdn.dbmvs.io/cleaner
+```
+
 Respuesta:
 
 ```json
 {
     "mode": "older_than",
     "days": 30,
+    "force": false,
     "deleted_files": 87,
+    "preserved_archival": 5,
     "deleted_folders": 2
 }
 ```
@@ -215,7 +228,9 @@ Respuesta:
 |-------|-------------|
 | `mode` | Modo de limpieza ejecutado (`all` o `older_than`) |
 | `days` | Días de antigüedad (sólo en modo `older_than`) |
+| `force` | Si `true`, ignora marcadores archival y elimina todo |
 | `deleted_files` | Número de imágenes eliminadas |
+| `preserved_archival` | Imágenes conservadas por protección archival |
 | `deleted_folders` | Número de carpetas vacías eliminadas |
 
 ## Tarea CRON (cron.php)
@@ -284,6 +299,52 @@ Para evitar rate-limiting y bloqueos por parte del CDN de TMDB, cada petición a
 - **Header `X-Forwarded-For`** con la IP seleccionada — respetado por muchos CDNs y proxies reversos como IP de origen
 
 TMDB, al igual que otros servicios, otorga tratamiento preferencial a los crawlers de Google (whitelisted) para permitir indexación. Aprovechar esa identidad reduce drásticamente la probabilidad de ser rate-limited durante descargas masivas de imágenes.
+
+## Protección archival
+
+TMDB elimina imágenes de su catálogo periódicamente (cambios de distribución, contenido retirado, cuentas de productora que se cierran). Una vez eliminada, **no se puede re-descargar**. El CDN detecta estos casos automáticamente y los protege de ser borrados.
+
+### Cómo funciona
+
+Antes de eliminar una imagen vieja, el cron hace un `HEAD` a TMDB:
+
+| Respuesta TMDB | Acción |
+|----------------|--------|
+| `200 OK` | Seguro eliminar — se re-descargará si alguien la pide |
+| `404 Not Found` / `410 Gone` | Crea marcador `.archival` y **preserva para siempre** |
+| Timeout / `5xx` / `429` | No se puede verificar — preserva por precaución, reintenta en la próxima ronda |
+
+Cada imagen archival tiene un marcador sibling: `abc.jpg` + `abc.jpg.archival`. El marcador es un archivo vacío que señala "nunca eliminar".
+
+### Performance
+
+El HEAD solo se dispara **durante operaciones de limpieza** (cron nocturno). **Nunca** afecta el serving de imágenes. Además, una vez marcada como archival, las siguientes ejecuciones del cron la saltan inmediatamente sin hacer HEAD nuevamente.
+
+### Forzar eliminación total
+
+Si necesitas vaciar completamente el CDN incluyendo archival (ej: mudanza de servidor), usa `force: true`:
+
+```bash
+curl -X POST \
+  -H "X-Api-Key: tu-clave-secreta" \
+  -d '{"mode": "all", "force": true}' \
+  https://cdn.dbmvs.io/cleaner
+```
+
+Sin `force`, tanto `/cleaner` como `cron.php` siempre respetan los marcadores archival.
+
+### Reporte del cron
+
+Con la protección archival activa, el reporte del cron muestra más detalle:
+
+```
+[03:00:01] Limpieza completada: 2026-04-17 03:00:01
+[03:00:01]   Archivos eliminados:  87 (124.5 MB liberados)
+[03:00:01]   Archivos archivados:  3 (protegidos permanentemente)
+[03:00:01]   Archivos inciertos:   1 (TMDB no respondió, reintentar)
+[03:00:01]   Carpetas eliminadas:  2
+[03:00:01]   Archivos conservados: 953
+```
 
 ## Logs
 

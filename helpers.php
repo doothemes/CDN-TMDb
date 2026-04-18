@@ -6,6 +6,8 @@
  * para evitar duplicación de código.
  */
 
+require_once __DIR__ . '/env.php';
+
 /**
  * Versión actual del CDN.
  * Se incluye en la respuesta de /get_stats para facilitar el seguimiento
@@ -13,6 +15,11 @@
  * Actualizar manualmente al hacer release.
  */
 const CDN_VERSION = '1.1.0';
+
+/**
+ * Host origen de las imágenes de TMDB.
+ */
+const TMDB_IMAGE_HOST = 'https://image.tmdb.org';
 
 /**
  * Mapa único de extensiones a tipos MIME.
@@ -146,6 +153,102 @@ function rotate_log(string $file, int $keep): void
 
     // El archivo activo se convierte en .1
     @rename($file, $file . '.1');
+}
+
+/**
+ * Obtiene el pool de IPs de Googlebot desde .env o usa el default hardcodeado.
+ *
+ * @return array Lista de IPs
+ */
+function googlebot_ips(): array
+{
+    $csv = env('GOOGLEBOT_IPS', '66.249.66.1,66.249.66.12,66.249.66.33,66.249.66.45,66.249.66.68,66.249.66.79,66.249.66.82,66.249.66.91,66.249.66.104');
+    return array_filter(array_map('trim', explode(',', $csv)));
+}
+
+/**
+ * Verifica si una imagen sigue disponible en TMDB mediante HEAD request.
+ * Usa identidad de Googlebot para evitar rate-limiting.
+ *
+ * @param string $tmdb_path Path relativo (ej: /t/p/w500/abc.jpg)
+ * @return int Código HTTP de la respuesta (200, 404, 429, 503, etc.) o 0 si falla la conexión
+ */
+function verify_tmdb_availability(string $tmdb_path): int
+{
+    $ips   = googlebot_ips();
+    $spoof = $ips[array_rand($ips)];
+    $url   = TMDB_IMAGE_HOST . $tmdb_path;
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_NOBODY         => true,  // HEAD request — no descarga el cuerpo
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => 5,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+        CURLOPT_HTTPHEADER     => ['X-Forwarded-For: ' . $spoof],
+    ]);
+    curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return $code;
+}
+
+/**
+ * Intenta eliminar un archivo con verificación previa en TMDB (archival protection).
+ *
+ * Flujo:
+ *   1. Si ya existe marcador .archival → preserva (retorna "skipped")
+ *   2. HEAD a TMDB
+ *   3. Si 404/410 → crea marcador .archival y preserva (retorna "archived")
+ *   4. Si 200 → elimina (retorna "deleted")
+ *   5. Si timeout/5xx/429 → no se puede verificar, preserva por precaución (retorna "uncertain")
+ *
+ * @param string $file_path Ruta absoluta al archivo en disco
+ * @param string $tmdb_path Path relativo en TMDB (ej: /t/p/w500/abc.jpg)
+ * @return string "deleted" | "archived" | "skipped" | "uncertain"
+ */
+function try_safe_delete(string $file_path, string $tmdb_path): string
+{
+    $marker = $file_path . '.archival';
+
+    // Ya marcado como archival: nunca se elimina
+    if (file_exists($marker)) {
+        return 'skipped';
+    }
+
+    $code = verify_tmdb_availability($tmdb_path);
+
+    // TMDB ya no tiene la imagen — marcar como archival y preservar
+    if ($code === 404 || $code === 410) {
+        @touch($marker);
+        return 'archived';
+    }
+
+    // TMDB tiene la imagen — seguro eliminar, se puede re-descargar
+    if ($code === 200) {
+        @unlink($file_path);
+        return 'deleted';
+    }
+
+    // Cualquier otro código (timeout, 5xx, 429): no podemos verificar
+    // Preservamos por precaución, se reintentará en la próxima ejecución
+    return 'uncertain';
+}
+
+/**
+ * Deriva el path TMDB a partir de la ruta absoluta del archivo en disco.
+ * Ejemplo: /var/www/cdn.dbmvs/t/p/w500/abc.jpg → /t/p/w500/abc.jpg
+ *
+ * @param string $file_path Ruta absoluta al archivo
+ * @param string $storage_dir Directorio raíz del CDN
+ * @return string Path TMDB con slashes normalizados
+ */
+function derive_tmdb_path(string $file_path, string $storage_dir): string
+{
+    $path = substr($file_path, strlen($storage_dir));
+    return str_replace('\\', '/', $path);
 }
 
 /**

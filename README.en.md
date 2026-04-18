@@ -163,6 +163,7 @@ Response:
     "version": "1.1.0",
     "folders": 3,
     "files": 1240,
+    "archival": 5,
     "size": {
         "bytes": 52428800,
         "human": "50 MB"
@@ -175,6 +176,7 @@ Response:
 | `version` | Current deployed CDN version |
 | `folders` | Total number of folders inside `/t/` |
 | `files` | Total number of stored images |
+| `archival` | Subset of `files` protected as archival (no longer in TMDB) |
 | `size.bytes` | Disk space in bytes |
 | `size.human` | Disk space in human-readable format |
 
@@ -200,13 +202,24 @@ curl -X POST \
   https://cdn.dbmvs.io/cleaner
 ```
 
+**Forced cleanup** — ignores archival protection and deletes **absolutely everything**:
+
+```bash
+curl -X POST \
+  -H "X-Api-Key: your-secret-key" \
+  -d '{"mode": "all", "force": true}' \
+  https://cdn.dbmvs.io/cleaner
+```
+
 Response:
 
 ```json
 {
     "mode": "older_than",
     "days": 30,
+    "force": false,
     "deleted_files": 87,
+    "preserved_archival": 5,
     "deleted_folders": 2
 }
 ```
@@ -215,7 +228,9 @@ Response:
 |-------|-------------|
 | `mode` | Executed cleanup mode (`all` or `older_than`) |
 | `days` | Age in days (only in `older_than` mode) |
+| `force` | If `true`, ignores archival markers and deletes everything |
 | `deleted_files` | Number of deleted images |
+| `preserved_archival` | Images preserved by archival protection |
 | `deleted_folders` | Number of deleted empty folders |
 
 ## CRON task (cron.php)
@@ -284,6 +299,52 @@ To avoid rate-limiting and blocks from the TMDB CDN, each request to `image.tmdb
 - **`X-Forwarded-For` header** with the selected IP — respected by many CDNs and reverse proxies as the origin IP
 
 TMDB, like other services, gives preferential treatment to Google crawlers (whitelisted) to allow indexing. Leveraging that identity drastically reduces the likelihood of being rate-limited during massive image downloads.
+
+## Archival protection
+
+TMDB periodically removes images from its catalog (distribution changes, pulled content, closed studio accounts). Once removed, **they cannot be re-downloaded**. The CDN automatically detects these cases and protects them from deletion.
+
+### How it works
+
+Before deleting an old image, the cron performs a `HEAD` request to TMDB:
+
+| TMDB response | Action |
+|---------------|--------|
+| `200 OK` | Safe to delete — will be re-downloaded if requested |
+| `404 Not Found` / `410 Gone` | Creates `.archival` marker and **preserves forever** |
+| Timeout / `5xx` / `429` | Cannot verify — preserve out of caution, retry next round |
+
+Each archival image has a sibling marker: `abc.jpg` + `abc.jpg.archival`. The marker is an empty file flagging "never delete".
+
+### Performance
+
+The HEAD is only triggered **during cleanup operations** (nightly cron). It **never** affects image serving. Also, once marked as archival, subsequent cron runs skip it immediately without HEAD again.
+
+### Force total deletion
+
+If you need to wipe the CDN completely including archival (e.g., server migration), use `force: true`:
+
+```bash
+curl -X POST \
+  -H "X-Api-Key: your-secret-key" \
+  -d '{"mode": "all", "force": true}' \
+  https://cdn.dbmvs.io/cleaner
+```
+
+Without `force`, both `/cleaner` and `cron.php` always respect archival markers.
+
+### Cron report
+
+With archival protection active, the cron report shows more detail:
+
+```
+[03:00:01] Cleanup completed: 2026-04-17 03:00:01
+[03:00:01]   Deleted files:    87 (124.5 MB freed)
+[03:00:01]   Archived files:   3 (permanently protected)
+[03:00:01]   Uncertain files:  1 (TMDB did not respond, retry)
+[03:00:01]   Deleted folders:  2
+[03:00:01]   Kept files:       953
+```
 
 ## Logs
 

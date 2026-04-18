@@ -64,9 +64,11 @@ if (!is_dir($base)) {
 
 $threshold = time() - (MAX_INACTIVE_DAYS * 86400);
 
-$deleted_files = 0;
-$deleted_bytes = 0;
-$skipped_files = 0;
+$deleted_files   = 0;
+$deleted_bytes   = 0;
+$archived_files  = 0;
+$uncertain_files = 0;
+$skipped_files   = 0;
 
 output("Iniciando limpieza del CDN...");
 output("Eliminando imágenes sin acceso en los últimos " . MAX_INACTIVE_DAYS . " días.");
@@ -83,24 +85,39 @@ foreach ($iterator as $item) {
         continue;
     }
 
-    // Los marcadores de negative cache (.404) se limpian siempre si están expirados
-    if (str_ends_with($item->getPathname(), '.404')) {
+    $path = $item->getPathname();
+
+    // Saltar los propios marcadores
+    if (str_ends_with($path, '.archival')) {
+        continue;
+    }
+
+    // Los marcadores de negative cache (.404) se limpian si están expirados
+    if (str_ends_with($path, '.404')) {
         if ($item->getMTime() < (time() - 86400)) {
-            @unlink($item->getPathname());
+            @unlink($path);
         }
         continue;
     }
 
     // Usar atime (último acceso) si está disponible, sino mtime (última modificación)
-    $atime = $item->getATime();
-    $mtime = $item->getMTime();
-    $last_access = max($atime, $mtime);
+    $last_access = max($item->getATime(), $item->getMTime());
 
     if ($last_access < $threshold) {
-        $size = $item->getSize();
-        if (@unlink($item->getPathname())) {
+        $size      = $item->getSize();
+        $tmdb_path = derive_tmdb_path($path, STORAGE_DIR);
+        $result    = try_safe_delete($path, $tmdb_path);
+
+        if ($result === 'deleted') {
             $deleted_files++;
             $deleted_bytes += $size;
+        } elseif ($result === 'archived') {
+            $archived_files++;
+        } elseif ($result === 'uncertain') {
+            $uncertain_files++;
+        } else {
+            // 'skipped' — ya estaba marcado archival
+            $skipped_files++;
         }
     } else {
         $skipped_files++;
@@ -114,6 +131,8 @@ $deleted_folders = cleanup_empty_dirs($base);
 output(str_repeat('-', 50));
 output("Limpieza completada: " . date('Y-m-d H:i:s'));
 output("  Archivos eliminados:  " . $deleted_files . " (" . human_size($deleted_bytes) . " liberados)");
+output("  Archivos archivados:  " . $archived_files . " (protegidos permanentemente)");
+output("  Archivos inciertos:   " . $uncertain_files . " (TMDB no respondió, reintentar)");
 output("  Carpetas eliminadas:  " . $deleted_folders);
 output("  Archivos conservados: " . $skipped_files);
 

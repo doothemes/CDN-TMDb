@@ -28,11 +28,6 @@ require_once __DIR__ . '/helpers.php';
 define('API_SECRET', env('API_SECRET', ''));
 
 /**
- * Host origen de las imágenes de TMDB.
- */
-define('TMDB_IMAGE_HOST', 'https://image.tmdb.org');
-
-/**
  * Directorio raíz donde se almacenan las imágenes descargadas.
  */
 define('STORAGE_DIR', __DIR__);
@@ -54,12 +49,6 @@ define('CORS_ORIGIN', env('CORS_ORIGIN', '*'));
  * para evitar golpear repetidamente el upstream con hashes inválidos.
  */
 define('NEGATIVE_CACHE_TTL', (int) env('NEGATIVE_CACHE_TTL', 3600));
-
-/**
- * Pool de IPs de Googlebot desde .env (CSV).
- * Si no está configurado en .env, usa un pool por defecto de IPs conocidas.
- */
-define('GOOGLEBOT_IPS', array_filter(array_map('trim', explode(',', env('GOOGLEBOT_IPS', '66.249.66.1,66.249.66.12,66.249.66.33,66.249.66.45,66.249.66.68,66.249.66.79,66.249.66.82,66.249.66.91,66.249.66.104')))));
 
 // ─── Obtener el path solicitado ─────────────────────────────────
 
@@ -122,7 +111,8 @@ if (file_exists($negative_marker) && (time() - filemtime($negative_marker)) < NE
 // ─── Descarga desde TMDB ────────────────────────────────────────
 
 $remote_url = TMDB_IMAGE_HOST . $path;
-$spoof_ip   = GOOGLEBOT_IPS[array_rand(GOOGLEBOT_IPS)];
+$ips        = googlebot_ips();
+$spoof_ip   = $ips[array_rand($ips)];
 
 /**
  * Configuramos cURL para descargar la imagen de TMDB con identidad de Googlebot.
@@ -252,16 +242,18 @@ function get_stats(): array
 
     if (!is_dir($base)) {
         return [
-            'version' => CDN_VERSION,
-            'folders' => 0,
-            'files'   => 0,
-            'size'    => ['bytes' => 0, 'human' => '0 B'],
+            'version'  => CDN_VERSION,
+            'folders'  => 0,
+            'files'    => 0,
+            'archival' => 0,
+            'size'     => ['bytes' => 0, 'human' => '0 B'],
         ];
     }
 
-    $folders = 0;
-    $files   = 0;
-    $bytes   = 0;
+    $folders  = 0;
+    $files    = 0;
+    $archival = 0;
+    $bytes    = 0;
 
     $iterator = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS),
@@ -269,23 +261,31 @@ function get_stats(): array
     );
 
     foreach ($iterator as $item) {
-        // Ignorar marcadores de negative cache en el conteo
-        if (str_ends_with($item->getPathname(), '.404')) {
+        $path = $item->getPathname();
+
+        // Ignorar marcadores internos en el conteo
+        if (str_ends_with($path, '.404') || str_ends_with($path, '.archival')) {
             continue;
         }
+
         if ($item->isDir()) {
             $folders++;
         } else {
             $files++;
             $bytes += $item->getSize();
+            // Contar cuántas de estas están protegidas como archival
+            if (file_exists($path . '.archival')) {
+                $archival++;
+            }
         }
     }
 
     return [
-        'version' => CDN_VERSION,
-        'folders' => $folders,
-        'files'   => $files,
-        'size'    => [
+        'version'  => CDN_VERSION,
+        'folders'  => $folders,
+        'files'    => $files,
+        'archival' => $archival,
+        'size'     => [
             'bytes' => $bytes,
             'human' => human_size($bytes),
         ],
@@ -296,8 +296,13 @@ function get_stats(): array
  * POST /cleaner
  *
  * Ejecuta limpieza de imágenes almacenadas. Soporta dos modos:
- *   { "mode": "all" } — elimina todas las imágenes
- *   { "mode": "older_than", "days": 30 } — elimina archivos con más de X días
+ *   { "mode": "all" } — elimina todas las imágenes replaceables
+ *   { "mode": "older_than", "days": 30 } — elimina replaceables con más de X días
+ *   { "mode": "all", "force": true } — elimina TODO (ignora archival markers)
+ *
+ * Por defecto, los archivos con marcador .archival son preservados
+ * (imágenes que TMDB ya no tiene y no se pueden re-descargar).
+ * Pasa "force": true para forzar eliminación total incluyendo archival.
  *
  * Todas las ejecuciones se registran en logs/audit.log para auditoría.
  *
@@ -308,11 +313,12 @@ function cleaner(): array
     $base = STORAGE_DIR . '/t';
 
     if (!is_dir($base)) {
-        return ['deleted_files' => 0, 'deleted_folders' => 0];
+        return ['deleted_files' => 0, 'preserved_archival' => 0, 'deleted_folders' => 0];
     }
 
     $input = json_decode(file_get_contents('php://input'), true) ?? [];
     $mode  = $input['mode'] ?? '';
+    $force = (bool) ($input['force'] ?? false);
 
     if (!in_array($mode, ['all', 'older_than'], true)) {
         json_response(['error' => 'Invalid mode. Use "all" or "older_than"'], 400);
@@ -326,8 +332,9 @@ function cleaner(): array
         }
     }
 
-    $threshold     = $mode === 'all' ? PHP_INT_MAX : time() - ($days * 86400);
-    $deleted_files = 0;
+    $threshold          = $mode === 'all' ? PHP_INT_MAX : time() - ($days * 86400);
+    $deleted_files      = 0;
+    $preserved_archival = 0;
 
     $iterator = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS),
@@ -338,8 +345,25 @@ function cleaner(): array
         if (!$item->isFile()) {
             continue;
         }
+
+        $path = $item->getPathname();
+
+        // Los marcadores mismos se eliminan junto con su archivo padre
+        if (str_ends_with($path, '.404') || str_ends_with($path, '.archival')) {
+            if ($mode === 'all' || $item->getMTime() < $threshold) {
+                @unlink($path);
+            }
+            continue;
+        }
+
+        // Respetar archival: si hay marcador, preservar a menos que force=true
+        if (!$force && file_exists($path . '.archival')) {
+            $preserved_archival++;
+            continue;
+        }
+
         if ($mode === 'all' || $item->getMTime() < $threshold) {
-            @unlink($item->getPathname());
+            @unlink($path);
             $deleted_files++;
         }
     }
@@ -349,13 +373,16 @@ function cleaner(): array
     // Log de auditoría
     if (!is_dir(LOG_DIR)) @mkdir(LOG_DIR, 0755, true);
     $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    log_line(LOG_DIR . '/audit.log', "cleaner ip={$ip} mode={$mode} days={$days} deleted_files={$deleted_files} deleted_folders={$deleted_folders}");
+    $force_str = $force ? 'true' : 'false';
+    log_line(LOG_DIR . '/audit.log', "cleaner ip={$ip} mode={$mode} days={$days} force={$force_str} deleted_files={$deleted_files} preserved_archival={$preserved_archival} deleted_folders={$deleted_folders}");
 
     return [
-        'mode'            => $mode,
-        'days'            => $mode === 'older_than' ? $days : null,
-        'deleted_files'   => $deleted_files,
-        'deleted_folders' => $deleted_folders,
+        'mode'               => $mode,
+        'days'               => $mode === 'older_than' ? $days : null,
+        'force'              => $force,
+        'deleted_files'      => $deleted_files,
+        'preserved_archival' => $preserved_archival,
+        'deleted_folders'    => $deleted_folders,
     ];
 }
 
