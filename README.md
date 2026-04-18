@@ -260,6 +260,16 @@ Cada ejecución genera un reporte con timestamp para los logs:
 - Sólo se puede ejecutar desde CLI (`php_sapi_name() === 'cli'`). Si se intenta acceder vía web, devuelve `403 Forbidden`
 - No requiere API key porque el acceso al servidor ya implica autorización
 
+## Identidad de Googlebot
+
+Para evitar rate-limiting y bloqueos por parte del CDN de TMDB, cada petición a `image.tmdb.org` se envía simulando ser un crawler de Google. Esta estrategia combina:
+
+- **User-Agent de Googlebot**: `Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)`
+- **Pool de 9 IPs de Googlebot** (`66.249.66.x`) rotadas aleatoriamente en cada petición
+- **Header `X-Forwarded-For`** con la IP seleccionada — respetado por muchos CDNs y proxies reversos como IP de origen
+
+TMDB, al igual que otros servicios, otorga tratamiento preferencial a los crawlers de Google (whitelisted) para permitir indexación. Aprovechar esa identidad reduce drásticamente la probabilidad de ser rate-limited durante descargas masivas de imágenes.
+
 ## Seguridad
 
 - **Validación de paths**: regex estricto que sólo acepta `/t/p/{size}/{hash}.{ext}` — previene path traversal y SSRF
