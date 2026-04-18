@@ -77,11 +77,16 @@ Las imágenes se sirven con `Cache-Control: public, max-age=2592000, immutable`.
 |--------|------------|
 | Path traversal (`../../etc/passwd`) | Regex rechaza cualquier carácter fuera de `[a-zA-Z0-9_-]` |
 | SSRF (redirigir a host interno) | El path se concatena con `TMDB_IMAGE_HOST` fijo, no se acepta input de host |
-| Almacenar contenido no-imagen | Validación de `Content-Type: image/*` antes de escribir a disco |
+| Almacenar contenido no-imagen | Doble validación: header `Content-Type` + inspección binaria con `finfo` |
+| Archivos parciales en disco | Escritura atómica: `write .tmp → rename()` — nunca queda un archivo corrupto |
+| Enumeración de hashes (agotar cURL) | Negative cache: 404s se recuerdan durante `NEGATIVE_CACHE_TTL` segundos |
 | Fuerza bruta en API key | `hash_equals()` previene timing attacks |
 | Hotlinking desde sitios no autorizados | Reglas anti-hotlink en `.htaccess` (activar en producción) |
 | Consumo de disco excesivo | Endpoint `/cleaner` + `cron.php` para limpieza manual, programada o por antigüedad |
+| Ejecuciones concurrentes del cron | `flock()` sobre `cron.lock` — sólo una instancia a la vez |
+| Eliminación sin trazabilidad | `logs/audit.log` registra IP, modo y resultado de cada `/cleaner` |
 | Credenciales expuestas en repo | `.env` excluido vía `.gitignore`, sólo se commitea `.env.example` sin valores reales |
+| MIME sniffing del navegador | Header `X-Content-Type-Options: nosniff` |
 | XSS vía SVG malicioso | El CDN sólo almacena SVGs descargados de TMDB (origen confiable), no acepta uploads de usuarios |
 
 ## Recomendaciones para producción

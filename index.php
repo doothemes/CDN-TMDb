@@ -1,82 +1,73 @@
 <?php
 /**
- * CDN Proxy para imagenes de TMDB (The Movie Database)
+ * CDN Proxy para imágenes de TMDB (The Movie Database)
  *
- * Este script actua como un proxy inverso con almacenamiento permanente.
- * Cuando un navegador solicita una imagen (ej: /t/p/w500/abc.jpg),
- * el script la descarga de image.tmdb.org y la guarda en disco
- * replicando la misma estructura de carpetas de TMDB.
+ * Proxy inverso con almacenamiento permanente. Cuando un navegador solicita
+ * una imagen (ej: /t/p/w500/abc.jpg), el script la descarga de image.tmdb.org
+ * y la guarda en disco replicando la estructura de carpetas de TMDB.
  *
- * En la siguiente peticion de la misma imagen, Apache detecta que
- * el archivo ya existe fisicamente y lo sirve como archivo estatico,
- * sin ejecutar PHP en absoluto. Esto se configura en .htaccess.
+ * En la siguiente petición de la misma imagen, Apache detecta que el archivo
+ * ya existe físicamente y lo sirve como archivo estático, sin ejecutar PHP
+ * en absoluto. Esto se configura en .htaccess.
  *
  * Flujo:
  *   1ra vez:  Cliente → Apache → PHP → TMDB → guarda en /t/p/w500/abc.jpg → responde
  *   2da vez:  Cliente → Apache → /t/p/w500/abc.jpg (sirve directo, PHP no interviene)
  */
 
-// ─── Configuracion ──────────────────────────────────────────────
+// ─── Configuración ──────────────────────────────────────────────
 
 require_once __DIR__ . '/env.php';
+require_once __DIR__ . '/helpers.php';
 
 /**
  * Clave secreta para proteger los endpoints administrativos (get_stats, cleaner).
- * Se valida contra el header X-Api-Key en cada peticion a estos endpoints.
+ * Se valida contra el header X-Api-Key en cada petición a estos endpoints.
  * Configurar en .env: API_SECRET=tu-clave-secreta
  */
 define('API_SECRET', env('API_SECRET', ''));
 
 /**
- * Host origen de las imagenes de TMDB.
- * Todas las imagenes de posters, backdrops, logos, etc. se sirven desde este dominio.
+ * Host origen de las imágenes de TMDB.
  */
 define('TMDB_IMAGE_HOST', 'https://image.tmdb.org');
 
 /**
- * Directorio raiz donde se almacenan las imagenes descargadas.
- * Usamos __DIR__ (el mismo document root) para que Apache pueda
- * servir los archivos directamente sin necesidad de alias o symlinks.
+ * Directorio raíz donde se almacenan las imágenes descargadas.
  */
 define('STORAGE_DIR', __DIR__);
 
 /**
- * Extensiones de imagen permitidas.
- * Solo se aceptan estos formatos — cualquier otra extension se rechaza
- * con un 400 Bad Request antes de llegar a TMDB.
+ * Directorio donde se guardan los logs (errores y auditoría).
+ * Se crea automáticamente si no existe.
  */
-define('ALLOWED_EXTENSIONS', ['jpg', 'jpeg', 'png', 'webp', 'svg']);
+define('LOG_DIR', __DIR__ . '/logs');
 
 /**
- * Mapa de extensiones a tipos MIME.
- * Se usa al servir la imagen para establecer el header Content-Type correcto,
- * asegurando que el navegador interprete el archivo como imagen.
+ * Origen permitido para CORS. Default "*" para uso abierto.
+ * En producción, restringir a dominios específicos vía .env.
  */
-define('MIME_TYPES', [
-    'jpg'  => 'image/jpeg',
-    'jpeg' => 'image/jpeg',
-    'png'  => 'image/png',
-    'webp' => 'image/webp',
-    'svg'  => 'image/svg+xml',
-]);
+define('CORS_ORIGIN', env('CORS_ORIGIN', '*'));
+
+/**
+ * TTL del negative cache: tiempo en segundos que se recuerda un 404 de TMDB
+ * para evitar golpear repetidamente el upstream con hashes inválidos.
+ */
+define('NEGATIVE_CACHE_TTL', (int) env('NEGATIVE_CACHE_TTL', 3600));
+
+/**
+ * Pool de IPs de Googlebot desde .env (CSV).
+ * Si no está configurado en .env, usa un pool por defecto de IPs conocidas.
+ */
+define('GOOGLEBOT_IPS', array_filter(array_map('trim', explode(',', env('GOOGLEBOT_IPS', '66.249.66.1,66.249.66.12,66.249.66.33,66.249.66.45,66.249.66.68,66.249.66.79,66.249.66.82,66.249.66.91,66.249.66.104')))));
 
 // ─── Obtener el path solicitado ─────────────────────────────────
 
-/**
- * Extraemos solo el path de la URL solicitada, descartando query strings.
- * Ejemplo imagen: /t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg
- * Ejemplo admin:  /get_stats o /cleaner
- */
 $path   = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $method = $_SERVER['REQUEST_METHOD'];
 
 // ─── Endpoints administrativos ──────────────────────────────────
 
-/**
- * Router para endpoints de administracion.
- * Estos endpoints estan protegidos por API_SECRET y permiten
- * consultar estadisticas del CDN y ejecutar limpiezas de cache.
- */
 if ($path === '/get_stats' && $method === 'GET') {
     authenticate();
     json_response(get_stats());
@@ -87,80 +78,56 @@ if ($path === '/cleaner' && $method === 'POST') {
     json_response(cleaner());
 }
 
-// ─── Validar path de imagen ────────────────────────────────────
+// ─── Validar path de imagen ─────────────────────────────────────
 
 /**
- * Si no es un endpoint admin, validamos que el path cumpla con el formato
- * de imagenes de TMDB: /t/p/{tamaño}/{nombre_archivo}.{extension}
- *
- * - {tamaño}: letras minusculas y numeros (ej: w500, w780, original)
- * - {nombre_archivo}: alfanumerico, guiones y guiones bajos (el hash de TMDB)
- * - {extension}: solo las permitidas (jpg, jpeg, png, webp, svg)
- *
- * Este regex es la primera linea de defensa contra path traversal y SSRF.
- * Cualquier intento de inyectar ../, hosts, o paths arbitrarios se rechaza aqui.
+ * El patrón de extensiones se deriva de MIME_TYPES (helpers.php) —
+ * fuente única de verdad.
  */
-if (!preg_match('#^/t/p/([a-z0-9]+)/([a-zA-Z0-9_-]+)\.(jpg|jpeg|png|webp|svg)$#', $path, $matches)) {
+$ext_pattern = allowed_extensions_pattern();
+
+if (!preg_match("#^/t/p/([a-z0-9]+)/([a-zA-Z0-9_-]+)\.($ext_pattern)$#", $path, $matches)) {
     http_response_code(400);
     exit('Bad request');
 }
 
-// Desglosamos las partes capturadas del regex
-$size     = $matches[1]; // Tamaño de imagen (w500, original, etc.)
-$filename = $matches[2]; // Hash unico del archivo en TMDB
-$ext      = $matches[3]; // Extension del archivo
+$size     = $matches[1];
+$filename = $matches[2];
+$ext      = $matches[3];
 
-// ─── Busqueda en disco ──────────────────────────────────────────
+// ─── Búsqueda en disco ──────────────────────────────────────────
 
-/**
- * Construimos la ruta completa donde deberia estar la imagen almacenada.
- * Ejemplo: /var/www/cdn.dbmvs/t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg
- */
 $file_path = STORAGE_DIR . $path;
 $file_dir  = dirname($file_path);
 
-/**
- * Verificamos si la imagen ya esta almacenada en disco.
- * Normalmente .htaccess ya deberia haber servido el archivo antes de llegar aqui,
- * pero esta comprobacion actua como fallback de seguridad por si el rewrite falla
- * o si el servidor no soporta las reglas de reescritura.
- */
+// Si ya está en disco (fallback por si .htaccess no lo atrapó)
 if (file_exists($file_path)) {
     serve_file($file_path, $ext);
     exit;
 }
 
+// ─── Negative cache: evitar golpear TMDB con hashes inválidos ───
+
+/**
+ * Si una petición anterior falló (404 de TMDB), marcamos el path como
+ * inexistente por NEGATIVE_CACHE_TTL segundos. Esto evita que un atacante
+ * agote recursos del servidor generando miles de hashes aleatorios.
+ */
+$negative_marker = $file_path . '.404';
+if (file_exists($negative_marker) && (time() - filemtime($negative_marker)) < NEGATIVE_CACHE_TTL) {
+    http_response_code(404);
+    exit('Not found');
+}
+
 // ─── Descarga desde TMDB ────────────────────────────────────────
 
-/**
- * Pool de direcciones IP de Googlebot.
- * Se envia una IP aleatoria en el header X-Forwarded-For para simular
- * que la peticion proviene de un crawler de Google. Esto, combinado
- * con el User-Agent de Googlebot, reduce la probabilidad de rate-limiting
- * o bloqueos por parte del CDN de TMDB.
- */
-$googlebot_ips = [
-    '66.249.66.1',  '66.249.66.12', '66.249.66.33',
-    '66.249.66.45', '66.249.66.68', '66.249.66.79',
-    '66.249.66.82', '66.249.66.91', '66.249.66.104',
-];
-
-// URL completa de la imagen en el servidor de TMDB
 $remote_url = TMDB_IMAGE_HOST . $path;
-
-// Seleccionamos una IP aleatoria del pool para esta peticion
-$spoof_ip = $googlebot_ips[array_rand($googlebot_ips)];
+$spoof_ip   = GOOGLEBOT_IPS[array_rand(GOOGLEBOT_IPS)];
 
 /**
- * Configuramos cURL para descargar la imagen de TMDB.
- *
- * - RETURNTRANSFER: devuelve el contenido como string en vez de imprimirlo
- * - FOLLOWLOCATION: sigue redirecciones 3xx (TMDB puede redirigir entre CDNs)
- * - TIMEOUT: maximo 15 segundos para la descarga completa
- * - CONNECTTIMEOUT: maximo 5 segundos para establecer la conexion TCP
- * - USERAGENT: nos identificamos como Googlebot para evitar bloqueos
- * - X-Forwarded-For: IP de Googlebot aleatoria para reforzar la identidad
- * - Accept: prioriza WebP, acepta cualquier imagen como fallback
+ * Configuramos cURL para descargar la imagen de TMDB con identidad de Googlebot.
+ * El User-Agent + X-Forwarded-For simulan un crawler de Google, reduciendo
+ * la probabilidad de rate-limiting por parte del CDN de TMDB.
  */
 $ch = curl_init($remote_url);
 curl_setopt_array($ch, [
@@ -175,50 +142,67 @@ curl_setopt_array($ch, [
     ],
 ]);
 
-// Ejecutamos la peticion y recopilamos la informacion de respuesta
-$body  = curl_exec($ch);                              // Contenido binario de la imagen
-$code  = curl_getinfo($ch, CURLINFO_HTTP_CODE);       // Codigo HTTP (200, 404, etc.)
-$ct    = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);    // Content-Type devuelto por TMDB
-$error = curl_error($ch);                             // Mensaje de error si cURL fallo
+$body = curl_exec($ch);
+$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$ct   = curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+
+// Si cURL falló a nivel de conexión, loggear para diagnóstico
+if ($body === false) {
+    $err = curl_error($ch);
+    curl_close($ch);
+    if (!is_dir(LOG_DIR)) @mkdir(LOG_DIR, 0755, true);
+    log_line(LOG_DIR . '/error.log', "cURL error fetching {$remote_url}: {$err}");
+    http_response_code(502);
+    exit('Upstream error');
+}
 curl_close($ch);
 
-/**
- * Si TMDB no devuelve HTTP 200 o cURL fallo, propagamos el error al cliente.
- * Usamos el mismo codigo HTTP que devolvio TMDB (404, 429, 500, etc.)
- * o 502 Bad Gateway si cURL no pudo conectarse en absoluto.
- */
-if ($code !== 200 || $body === false) {
+// Si TMDB devolvió error, marcar en negative cache y propagar el código
+if ($code !== 200) {
+    if ($code === 404) {
+        if (!is_dir($file_dir)) @mkdir($file_dir, 0755, true);
+        @file_put_contents($negative_marker, '');
+    }
     http_response_code($code ?: 502);
     exit('Upstream error');
 }
 
 /**
- * Verificamos que TMDB realmente devolvio una imagen y no HTML de error,
- * JSON u otro tipo de contenido inesperado. Solo aceptamos Content-Type
- * que comience con "image/" para evitar almacenar basura en disco.
+ * Verificación doble de Content-Type:
+ *   1. Header de la respuesta (lo que dijo TMDB)
+ *   2. Inspección binaria real (finfo sobre los bytes descargados)
+ *
+ * Ambos deben ser "image/*". Esto previene que un upstream comprometido
+ * o MITM envíe contenido malicioso con un header falsificado.
  */
 if (!str_starts_with($ct, 'image/')) {
     http_response_code(502);
     exit('Invalid upstream content type');
 }
 
-// ─── Almacenar en disco ─────────────────────────────────────────
+$finfo    = new finfo(FILEINFO_MIME_TYPE);
+$detected = $finfo->buffer($body);
+if (!str_starts_with($detected, 'image/') && $detected !== 'text/plain') {
+    // text/plain se permite porque finfo detecta SVG como text/plain a veces
+    http_response_code(502);
+    exit('Invalid upstream content');
+}
 
-/**
- * Creamos la estructura de directorios si no existe.
- * mkdir con recursive=true crea toda la ruta: /t/p/w500/ de una sola vez.
- * Los permisos 0755 permiten lectura publica (necesario para que Apache sirva).
- */
+// ─── Almacenar en disco de forma atómica ────────────────────────
+
 if (!is_dir($file_dir)) {
     mkdir($file_dir, 0755, true);
 }
 
 /**
- * Guardamos el contenido binario de la imagen en disco.
- * A partir de este momento, Apache servira este archivo directamente
- * en todas las peticiones futuras, sin pasar por PHP.
+ * Escritura atómica: primero a archivo .tmp con sufijo aleatorio, luego rename().
+ * Si dos peticiones concurrentes descargan la misma imagen, una de las dos
+ * ganará el rename final sin corromper el archivo.
  */
-file_put_contents($file_path, $body);
+atomic_write($file_path, $body);
+
+// Si existía un marcador 404 anterior, eliminarlo (la imagen ahora existe)
+@unlink($negative_marker);
 
 // ─── Servir la imagen al cliente ────────────────────────────────
 
@@ -227,22 +211,22 @@ serve_file($file_path, $ext);
 // ─── Funciones administrativas ──────────────────────────────────
 
 /**
- * Valida que la peticion incluya el header X-Api-Key con la clave secreta.
- * Si la clave no coincide o no esta presente, responde 401 y termina la ejecucion.
+ * Valida que la petición incluya el header X-Api-Key con la clave secreta.
+ * Si la clave no coincide o no está presente, responde 401 y termina.
  */
 function authenticate(): void
 {
     $key = $_SERVER['HTTP_X_API_KEY'] ?? '';
-    if (!hash_equals(API_SECRET, $key)) {
+    if (API_SECRET === '' || !hash_equals(API_SECRET, $key)) {
         json_response(['error' => 'Unauthorized'], 401);
     }
 }
 
 /**
- * Envia una respuesta JSON con headers apropiados y termina la ejecucion.
+ * Envía una respuesta JSON con headers apropiados y termina la ejecución.
  *
  * @param array $data Datos a serializar como JSON
- * @param int $code Codigo HTTP de respuesta (default: 200)
+ * @param int $code Código HTTP de respuesta (default: 200)
  */
 function json_response(array $data, int $code = 200): void
 {
@@ -255,18 +239,17 @@ function json_response(array $data, int $code = 200): void
 /**
  * GET /get_stats
  *
- * Escanea recursivamente el directorio /t/ y devuelve estadisticas del CDN:
- * - Total de carpetas (tamaños como w500, w780, original, etc.)
+ * Escanea recursivamente el directorio /t/ y devuelve estadísticas del CDN:
+ * - Total de carpetas
  * - Total de archivos almacenados
  * - Espacio en disco ocupado (bytes y formato legible)
  *
- * @return array Estadisticas del CDN
+ * @return array Estadísticas del CDN
  */
 function get_stats(): array
 {
     $base = STORAGE_DIR . '/t';
 
-    // Si no existe el directorio /t/, el CDN esta vacio
     if (!is_dir($base)) {
         return [
             'folders' => 0,
@@ -279,13 +262,16 @@ function get_stats(): array
     $files   = 0;
     $bytes   = 0;
 
-    // RecursiveDirectoryIterator recorre todo el arbol de /t/p/w500/*, /t/p/w780/*, etc.
-    $iterator = new \RecursiveIteratorIterator(
-        new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS),
-        \RecursiveIteratorIterator::SELF_FIRST
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::SELF_FIRST
     );
 
     foreach ($iterator as $item) {
+        // Ignorar marcadores de negative cache en el conteo
+        if (str_ends_with($item->getPathname(), '.404')) {
+            continue;
+        }
         if ($item->isDir()) {
             $folders++;
         } else {
@@ -307,30 +293,22 @@ function get_stats(): array
 /**
  * POST /cleaner
  *
- * Ejecuta limpieza de imagenes almacenadas en el CDN.
- * Acepta un body JSON con los siguientes modos:
+ * Ejecuta limpieza de imágenes almacenadas. Soporta dos modos:
+ *   { "mode": "all" } — elimina todas las imágenes
+ *   { "mode": "older_than", "days": 30 } — elimina archivos con más de X días
  *
- *   Limpieza total (elimina TODAS las imagenes):
- *   { "mode": "all" }
+ * Todas las ejecuciones se registran en logs/audit.log para auditoría.
  *
- *   Limpieza por antiguedad (elimina archivos no modificados en X dias):
- *   { "mode": "older_than", "days": 30 }
- *
- * Despues de eliminar los archivos, tambien elimina las carpetas vacias
- * que hayan quedado huerfanas para mantener el disco limpio.
- *
- * @return array Resultado con el numero de archivos y carpetas eliminados
+ * @return array Resultado con archivos y carpetas eliminados
  */
 function cleaner(): array
 {
     $base = STORAGE_DIR . '/t';
 
-    // Si no existe el directorio /t/, no hay nada que limpiar
     if (!is_dir($base)) {
         return ['deleted_files' => 0, 'deleted_folders' => 0];
     }
 
-    // Leer y validar el body JSON de la peticion
     $input = json_decode(file_get_contents('php://input'), true) ?? [];
     $mode  = $input['mode'] ?? '';
 
@@ -338,38 +316,38 @@ function cleaner(): array
         json_response(['error' => 'Invalid mode. Use "all" or "older_than"'], 400);
     }
 
-    // Para el modo older_than, validar que se envie un numero de dias valido
     $days = 0;
     if ($mode === 'older_than') {
-        $days = (int)($input['days'] ?? 0);
+        $days = (int) ($input['days'] ?? 0);
         if ($days < 1) {
             json_response(['error' => 'Parameter "days" must be a positive integer'], 400);
         }
     }
 
-    // Calcular el timestamp limite: archivos modificados antes de esta fecha se eliminan
     $threshold     = $mode === 'all' ? PHP_INT_MAX : time() - ($days * 86400);
     $deleted_files = 0;
 
-    // Recorrer todos los archivos dentro de /t/ y eliminar los que cumplan la condicion
-    $iterator = new \RecursiveIteratorIterator(
-        new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS),
-        \RecursiveIteratorIterator::CHILD_FIRST // Hijos primero para poder eliminar carpetas vacias despues
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($base, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
     );
 
     foreach ($iterator as $item) {
         if (!$item->isFile()) {
             continue;
         }
-        // En modo "all" siempre elimina; en "older_than" compara la fecha de modificacion
         if ($mode === 'all' || $item->getMTime() < $threshold) {
-            unlink($item->getPathname());
+            @unlink($item->getPathname());
             $deleted_files++;
         }
     }
 
-    // Segunda pasada: eliminar carpetas vacias que quedaron huerfanas
     $deleted_folders = cleanup_empty_dirs($base);
+
+    // Log de auditoría
+    if (!is_dir(LOG_DIR)) @mkdir(LOG_DIR, 0755, true);
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    log_line(LOG_DIR . '/audit.log', "cleaner ip={$ip} mode={$mode} days={$days} deleted_files={$deleted_files} deleted_folders={$deleted_folders}");
 
     return [
         'mode'            => $mode,
@@ -379,93 +357,43 @@ function cleaner(): array
     ];
 }
 
-/**
- * Elimina recursivamente todas las carpetas vacias dentro de un directorio.
- * Recorre de abajo hacia arriba (CHILD_FIRST) para que las subcarpetas
- * se evaluen antes que sus padres.
- *
- * @param string $dir Directorio raiz a limpiar
- * @return int Numero de carpetas eliminadas
- */
-function cleanup_empty_dirs(string $dir): int
-{
-    $deleted = 0;
-    $iterator = new \RecursiveIteratorIterator(
-        new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS),
-        \RecursiveIteratorIterator::CHILD_FIRST
-    );
-
-    foreach ($iterator as $item) {
-        if ($item->isDir() && count(scandir($item->getPathname())) === 2) {
-            rmdir($item->getPathname());
-            $deleted++;
-        }
-    }
-
-    // Verificar si el directorio raiz /t/ tambien quedo vacio
-    if (is_dir($dir) && count(scandir($dir)) === 2) {
-        rmdir($dir);
-        $deleted++;
-    }
-
-    return $deleted;
-}
-
-/**
- * Convierte bytes a formato legible (KB, MB, GB, etc.)
- *
- * @param int $bytes Tamaño en bytes
- * @return string Tamaño formateado (ej: "12.45 MB")
- */
-function human_size(int $bytes): string
-{
-    $units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    $i = 0;
-    $size = (float)$bytes;
-    while ($size >= 1024 && $i < count($units) - 1) {
-        $size /= 1024;
-        $i++;
-    }
-    return round($size, 2) . ' ' . $units[$i];
-}
-
-// ─── Helpers ────────────────────────────────────────────────────
+// ─── Servir archivos ────────────────────────────────────────────
 
 /**
  * Sirve un archivo de imagen desde disco con headers HTTP optimizados.
  *
- * Establece headers de cache agresivos (30 dias, immutable) ya que las
- * imagenes de TMDB son inmutables por naturaleza — el hash del nombre
- * cambia si el contenido cambia, asi que nunca hay conflictos de cache.
+ * Establece cache agresivo (30 días, immutable) porque las imágenes de TMDB
+ * son inmutables por naturaleza — el hash del nombre cambia si el contenido cambia.
  *
- * Tambien soporta peticiones condicionales (If-None-Match, If-Modified-Since)
- * respondiendo con 304 Not Modified cuando el navegador ya tiene la imagen
- * en su cache local, ahorrando ancho de banda.
+ * Soporta peticiones condicionales (If-None-Match, If-Modified-Since)
+ * respondiendo con 304 Not Modified cuando el cliente ya tiene la imagen.
  *
  * @param string $file Ruta absoluta al archivo en disco
- * @param string $ext  Extension del archivo (para resolver el MIME type)
+ * @param string $ext  Extensión del archivo
  */
 function serve_file(string $file, string $ext): void
 {
     $mime    = MIME_TYPES[$ext] ?? 'application/octet-stream';
     $size    = filesize($file);
-    $etag    = '"' . md5_file($file) . '"';    // Identificador unico basado en contenido
-    $lastmod = filemtime($file);                // Timestamp de ultima modificacion
+    $etag    = '"' . md5_file($file) . '"';
+    $lastmod = filemtime($file);
 
-    // Headers de respuesta
-    header('Content-Type: ' . $mime);                              // Tipo de contenido
-    header('Content-Length: ' . $size);                            // Tamaño en bytes
-    header('Cache-Control: public, max-age=2592000, immutable');   // Cache 30 dias, no revalidar
-    header('ETag: ' . $etag);                                      // Hash para validacion condicional
-    header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $lastmod) . ' GMT');  // Fecha de modificacion
-    header('X-Cache: HIT');                                        // Indicador de que salio del CDN
-    header('Access-Control-Allow-Origin: *');                       // CORS abierto para uso en cualquier dominio
+    // Headers de contenido
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . $size);
+    header('Cache-Control: public, max-age=2592000, immutable');
+    header('ETag: ' . $etag);
+    header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $lastmod) . ' GMT');
+    header('X-Cache: HIT');
 
-    /**
-     * Peticiones condicionales: si el navegador envia If-None-Match (ETag)
-     * o If-Modified-Since y la imagen no ha cambiado, respondemos 304
-     * sin enviar el cuerpo — el navegador usa su copia local.
-     */
+    // CORS configurable
+    header('Access-Control-Allow-Origin: ' . CORS_ORIGIN);
+
+    // Hardening: previene MIME sniffing y referrer leaking
+    header('X-Content-Type-Options: nosniff');
+    header('Referrer-Policy: no-referrer-when-downgrade');
+
+    // Peticiones condicionales: 304 si el cliente ya tiene la imagen
     if (
         (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) ||
         (isset($_SERVER['HTTP_IF_MODIFIED_SINCE']) && strtotime($_SERVER['HTTP_IF_MODIFIED_SINCE']) >= $lastmod)
@@ -474,6 +402,5 @@ function serve_file(string $file, string $ext): void
         return;
     }
 
-    // Enviamos el contenido binario de la imagen al cliente
     readfile($file);
 }

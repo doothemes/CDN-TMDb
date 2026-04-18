@@ -18,10 +18,14 @@ cdn.dbmvs/
 ├── .env.example    # Template de configuración
 ├── .env            # Variables de entorno (no se commitea)
 ├── .gitattributes  # Normaliza line endings y controla exports
-├── .gitignore      # Excluye /t/ y .env del repositorio
+├── .gitignore      # Excluye /t/, /logs/, .env y cron.lock
 ├── env.php         # Loader de variables de entorno
+├── helpers.php     # Funciones compartidas entre index.php y cron.php
 ├── index.php       # Proxy + endpoints administrativos
 ├── cron.php        # Tarea programada para limpieza automática
+├── logs/           # Logs de auditoría y errores (se crea automáticamente)
+│   ├── audit.log   # Registro de operaciones sensibles (cleaner)
+│   └── error.log   # Errores de cURL y fallos upstream
 └── t/              # Imágenes almacenadas (se crea automáticamente)
     └── p/
         ├── w500/
@@ -120,6 +124,9 @@ Toda la configuración se gestiona desde el archivo `.env` en la raíz del proye
 |----------|-------------|---------|
 | `API_SECRET` | Clave secreta para endpoints administrativos (`get_stats`, `cleaner`) | *(vacío)* |
 | `MAX_INACTIVE_DAYS` | Días máximos sin acceso antes de que el cron elimine una imagen | `30` |
+| `CORS_ORIGIN` | Valor del header `Access-Control-Allow-Origin` | `*` |
+| `NEGATIVE_CACHE_TTL` | Segundos que se recuerda un 404 de TMDB para evitar repetir peticiones inválidas | `3600` |
+| `GOOGLEBOT_IPS` | Pool de IPs de Googlebot (CSV) para rotar en `X-Forwarded-For` | *(9 IPs hardcodeadas)* |
 
 ### Anti-hotlink
 
@@ -273,11 +280,16 @@ TMDB, al igual que otros servicios, otorga tratamiento preferencial a los crawle
 ## Seguridad
 
 - **Validación de paths**: regex estricto que sólo acepta `/t/p/{size}/{hash}.{ext}` — previene path traversal y SSRF
-- **Extensiones limitadas**: sólo `jpg`, `jpeg`, `png`, `webp`, `svg`
-- **Validación de Content-Type**: verifica que TMDB devuelva `image/*` antes de almacenar
+- **Extensiones limitadas**: derivadas de `MIME_TYPES` en `helpers.php` (fuente única)
+- **Doble validación de contenido**: header `Content-Type` + inspección binaria con `finfo`
+- **Escritura atómica**: `file_put_contents` a `.tmp` + `rename()` evita archivos parciales
+- **Negative cache**: 404s de TMDB se recuerdan para prevenir ataques de enumeración de hashes
+- **Lock file en cron**: previene ejecuciones concurrentes del limpiador
+- **Audit log**: cada ejecución de `/cleaner` se registra con IP, modo y resultado
 - **Anti-hotlink**: protección configurable por dominio vía `.htaccess`
 - **API protegida**: endpoints admin requieren `X-Api-Key` validado con `hash_equals()` (resistente a timing attacks)
-- **CORS**: `Access-Control-Allow-Origin: *` habilitado para uso en múltiples dominios
+- **CORS configurable**: `Access-Control-Allow-Origin` vía `.env`
+- **Hardening**: `X-Content-Type-Options: nosniff` y `Referrer-Policy`
 
 ## Headers de caché
 

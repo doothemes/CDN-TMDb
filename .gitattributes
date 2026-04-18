@@ -1,4 +1,4 @@
-# Normalizar saltos de linea
+# Normalizar saltos de línea
 * text=auto
 
 # PHP
@@ -7,11 +7,11 @@
 # Apache
 .htaccess text eol=lf
 
-# Documentacion
+# Documentación
 *.md text eol=lf
-LICENSE.md text eol=lf
+LICENSE text eol=lf
 
-# Configuracion
+# Configuración
 .env.example text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf
