@@ -13,6 +13,54 @@ Registro histórico de la deuda técnica del proyecto. Documenta tanto lo que se
 
 ---
 
+## ✅ Resuelto en v1.1.1 (patch de auditoría externa)
+
+Hallazgos reportados por auditoría automatizada con GitHub Copilot.
+
+### 🔴 Crítico
+
+#### A-1. Headers de seguridad ausentes en hot path de Apache
+**Problema:** Los headers `X-Content-Type-Options`, `Referrer-Policy` y CORS se establecían sólo en `serve_file()` de PHP, pero como el diseño del CDN hace que Apache sirva directamente los archivos cacheados (99%+ del tráfico), esos headers no llegaban al cliente en la práctica.
+**Solución:** Movidos a `.htaccess` vía `mod_headers` para aplicar a todas las peticiones.
+
+#### A-2. XSS vía SVG sin Content-Security-Policy
+**Problema:** SVGs servidos con `image/svg+xml` sin CSP permitían ejecución de JavaScript embebido si TMDB (o un MITM) servía contenido malicioso.
+**Solución:** `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'` aplicado a SVGs desde `.htaccess` (hot path) y `serve_file()` (cold path) como defensa en profundidad.
+
+### 🟠 Alto
+
+#### A-3. SSRF parcial por `CURLOPT_FOLLOWLOCATION` sin restricción
+**Problema:** cURL seguía redirects sin validar protocolos. Un redirect a `http://169.254.169.254/` (AWS metadata) o `file:///etc/passwd` sería seguido.
+**Solución:** `CURLOPT_PROTOCOLS` y `CURLOPT_REDIR_PROTOCOLS` restringidos a `CURLPROTO_HTTPS`, `CURLOPT_MAXREDIRS => 3`. Aplicado en `index.php` y en `verify_tmdb_availability()`.
+
+#### A-4. Bypass en validación finfo vía `text/plain`
+**Problema:** La excepción global para `text/plain` permitía que scripts PHP/HTML/JS detectados como texto plano pasaran la validación si TMDB enviaba `Content-Type: image/*`.
+**Solución:** `text/plain` y XML sólo se aceptan cuando la extensión solicitada es `.svg`. Para el resto, sólo `image/*`.
+
+#### A-5. `md5_file()` re-leía el archivo completo en primera petición
+**Problema:** Después de `atomic_write($body)`, `serve_file()` hacía `md5_file($file)` leyendo el archivo completo de disco, cuando `$body` ya estaba en memoria. Para imágenes `original` de 10MB, 10MB de I/O innecesario.
+**Solución:** `serve_file()` acepta un hash pre-calculado como tercer parámetro. En la ruta de descarga nueva se pasa `md5($body)` directamente.
+
+#### A-6. HEAD requests secuenciales sin límite en cron
+**Problema:** Con 10k archivos inactivos, `cron.php` podía tardar 14+ horas haciendo HEADs secuenciales a TMDB.
+**Solución:** Nueva variable `MAX_HEAD_REQUESTS_PER_RUN` (default 500) que limita HEADs por ejecución. Los archivos excedentes se difieren a la siguiente corrida. Además, los archivos ya marcados como `.archival` se saltan antes de consumir presupuesto.
+
+### 🟡 Medio
+
+#### A-7. Respuesta 304 incluía `Content-Length` (RFC 7232)
+**Problema:** `serve_file()` enviaba `Content-Length` antes de evaluar si la petición era condicional. Un 304 no debe incluir headers específicos del cuerpo.
+**Solución:** Reordenados los headers — cache/validation primero, check de 304, luego body headers sólo si es 200.
+
+#### A-8. `atomic_write()` retorno ignorado
+**Problema:** Si fallaba la escritura (disco lleno, permisos), el error era silencioso y se intentaba servir desde un archivo inexistente.
+**Solución:** Fallback que sirve desde memoria + `error_log()` cuando `atomic_write()` falla.
+
+#### A-9. SECURITY.md desactualizado
+**Problema:** Decía que CORS se configuraba editando `serve_file()` y mostraba el regex estático.
+**Solución:** Actualizado a `CORS_ORIGIN` en `.env` y nota sobre patrón dinámico.
+
+---
+
 ## ✅ Resuelto en v1.1.0
 
 ### 🔴 Crítico

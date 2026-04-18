@@ -121,12 +121,15 @@ $spoof_ip   = $ips[array_rand($ips)];
  */
 $ch = curl_init($remote_url);
 curl_setopt_array($ch, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_FOLLOWLOCATION => true,
-    CURLOPT_TIMEOUT        => 15,
-    CURLOPT_CONNECTTIMEOUT => 5,
-    CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-    CURLOPT_HTTPHEADER     => [
+    CURLOPT_RETURNTRANSFER  => true,
+    CURLOPT_FOLLOWLOCATION  => true,
+    CURLOPT_MAXREDIRS       => 3,
+    CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
+    CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+    CURLOPT_TIMEOUT         => 15,
+    CURLOPT_CONNECTTIMEOUT  => 5,
+    CURLOPT_USERAGENT       => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    CURLOPT_HTTPHEADER      => [
         'Accept: image/webp,image/*,*/*;q=0.8',
         'X-Forwarded-For: ' . $spoof_ip,
     ],
@@ -172,8 +175,22 @@ if (!str_starts_with($ct, 'image/')) {
 
 $finfo    = new finfo(FILEINFO_MIME_TYPE);
 $detected = $finfo->buffer($body);
-if (!str_starts_with($detected, 'image/') && $detected !== 'text/plain') {
-    // text/plain se permite porque finfo detecta SVG como text/plain a veces
+
+/**
+ * Estrategia de validación binaria:
+ *   - Para cualquier extensión: Content-Type debe comenzar con "image/"
+ *   - Para SVG específicamente: finfo puede detectar text/plain, text/xml,
+ *     application/xml, o image/svg+xml según el contenido. Sólo en este caso
+ *     aceptamos MIME types de texto/XML.
+ *
+ * Esto cierra el bypass donde un script PHP/HTML detectado como text/plain
+ * podía pasar si el Content-Type de TMDB decía image/*.
+ */
+$is_svg   = ($ext === 'svg');
+$valid_binary = str_starts_with($detected, 'image/')
+    || ($is_svg && in_array($detected, ['text/plain', 'text/xml', 'application/xml'], true));
+
+if (!$valid_binary) {
     http_response_code(502);
     exit('Invalid upstream content');
 }
@@ -189,14 +206,24 @@ if (!is_dir($file_dir)) {
  * Si dos peticiones concurrentes descargan la misma imagen, una de las dos
  * ganará el rename final sin corromper el archivo.
  */
-atomic_write($file_path, $body);
+if (!atomic_write($file_path, $body)) {
+    // Fallback: si falla la escritura (disco lleno, permisos), servir desde memoria
+    // para no bloquear al cliente, pero no cacheamos para siguiente petición
+    error_log('CDN: atomic_write failed for ' . $file_path);
+    header('Content-Type: ' . (MIME_TYPES[$ext] ?? 'application/octet-stream'));
+    header('Content-Length: ' . strlen($body));
+    header('X-Cache: MISS');
+    echo $body;
+    exit;
+}
 
 // Si existía un marcador 404 anterior, eliminarlo (la imagen ahora existe)
 @unlink($negative_marker);
 
 // ─── Servir la imagen al cliente ────────────────────────────────
 
-serve_file($file_path, $ext);
+// Pasamos el hash calculado sobre $body (en memoria) para evitar re-leer el archivo
+serve_file($file_path, $ext, md5($body));
 
 // ─── Funciones administrativas ──────────────────────────────────
 
@@ -397,38 +424,46 @@ function cleaner(): array
  * Soporta peticiones condicionales (If-None-Match, If-Modified-Since)
  * respondiendo con 304 Not Modified cuando el cliente ya tiene la imagen.
  *
- * @param string $file Ruta absoluta al archivo en disco
- * @param string $ext  Extensión del archivo
+ * @param string      $file Ruta absoluta al archivo en disco
+ * @param string      $ext  Extensión del archivo
+ * @param string|null $hash Hash MD5 pre-calculado (evita re-leer el archivo).
+ *                          Si es null, se calcula con md5_file().
  */
-function serve_file(string $file, string $ext): void
+function serve_file(string $file, string $ext, ?string $hash = null): void
 {
     $mime    = MIME_TYPES[$ext] ?? 'application/octet-stream';
-    $size    = filesize($file);
-    $etag    = '"' . md5_file($file) . '"';
     $lastmod = filemtime($file);
+    $etag    = '"' . ($hash ?? md5_file($file)) . '"';
 
-    // Headers de contenido
-    header('Content-Type: ' . $mime);
-    header('Content-Length: ' . $size);
+    // Headers de validación y cache (válidos tanto para 200 como para 304)
     header('Cache-Control: public, max-age=2592000, immutable');
     header('ETag: ' . $etag);
     header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $lastmod) . ' GMT');
     header('X-Cache: HIT');
-
-    // CORS configurable
     header('Access-Control-Allow-Origin: ' . CORS_ORIGIN);
-
-    // Hardening: previene MIME sniffing y referrer leaking
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: no-referrer-when-downgrade');
 
-    // Peticiones condicionales: 304 si el cliente ya tiene la imagen
+    /**
+     * Petición condicional: si el cliente ya tiene la imagen, respondemos 304
+     * ANTES de establecer Content-Length/Content-Type (RFC 7232 §4.1: un 304
+     * no debe incluir headers específicos del cuerpo).
+     */
     if (
         (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) ||
         (isset($_SERVER['HTTP_IF_MODIFIED_SINCE']) && strtotime($_SERVER['HTTP_IF_MODIFIED_SINCE']) >= $lastmod)
     ) {
         http_response_code(304);
         return;
+    }
+
+    // Headers del cuerpo (sólo para 200)
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($file));
+
+    // CSP restrictivo para SVGs (defensa en profundidad, complementa .htaccess)
+    if ($ext === 'svg') {
+        header("Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'");
     }
 
     readfile($file);

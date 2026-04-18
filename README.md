@@ -25,6 +25,7 @@ cdn.dbmvs/
 ├── helpers.php     # Funciones compartidas entre index.php y cron.php
 ├── index.php       # Proxy + endpoints administrativos
 ├── cron.php        # Tarea programada para limpieza automática
+├── rotate-token.php # Script CLI para rotar API_SECRET de forma segura
 ├── logs/           # Logs de auditoría y errores (se crea automáticamente)
 │   ├── audit.log   # Registro de operaciones sensibles (cleaner)
 │   ├── audit.log.1 # Rotaciones antiguas (hasta LOG_KEEP_FILES)
@@ -133,6 +134,7 @@ Toda la configuración se gestiona desde el archivo `.env` en la raíz del proye
 | `GOOGLEBOT_IPS` | Pool de IPs de Googlebot (CSV) para rotar en `X-Forwarded-For` | *(9 IPs hardcodeadas)* |
 | `LOG_MAX_SIZE_MB` | Tamaño máximo en MB antes de rotar un log automáticamente | `5` |
 | `LOG_KEEP_FILES` | Número de rotaciones antiguas que se conservan | `5` |
+| `MAX_HEAD_REQUESTS_PER_RUN` | Límite de HEADs a TMDB por ejecución del cron (archival protection) | `500` |
 
 ### Anti-hotlink
 
@@ -345,6 +347,41 @@ Con la protección archival activa, el reporte del cron muestra más detalle:
 [03:00:01]   Carpetas eliminadas:  2
 [03:00:01]   Archivos conservados: 953
 ```
+
+## Rotación de API_SECRET
+
+Script CLI para generar un nuevo token criptográficamente seguro y actualizar `.env` sin exposición web.
+
+```bash
+php /ruta/al/cdn.dbmvs/rotate-token.php
+```
+
+Salida ejemplo:
+
+```
+✓ Token rotado correctamente
+----------------------------------------------------------------------
+Fecha:      2026-04-18 03:15:42
+Anterior:   MGZ56iQ6...
+Nuevo:      664a41f6a5f1d3ecf5f8f05b86e8a450ef0b5f4ab4a1637419c0bdf4bab1c923
+----------------------------------------------------------------------
+```
+
+### Por qué CLI y no un endpoint HTTP
+
+Un endpoint de rotación vía HTTP requeriría que Apache tenga permisos de escritura sobre `.env` — convierte el archivo de secretos en blanco de cualquier RCE futuro. El script CLI elimina esa superficie:
+
+- **Sólo desde terminal**: `php_sapi_name() !== 'cli'` rechaza cualquier invocación web con 403
+- **Apache nunca toca `.env`**: los permisos pueden seguir siendo read-only para el web server
+- **Sin lockout por red**: el nuevo token se imprime en la terminal, no viaja por HTTP
+- **Sin auto-lockout por token comprometido**: un atacante con el token no puede rotarlo para encerrarte afuera
+
+### Seguridad
+
+- Token generado con `bin2hex(random_bytes(32))` — 256 bits de entropía
+- Escritura atómica: `.env.tmp` + `rename()` previene corrupción si la operación se interrumpe
+- Preserva comentarios, líneas vacías y demás variables del archivo
+- Registra la rotación en `logs/audit.log` con previews (8 chars) de los tokens anterior y nuevo
 
 ## Logs
 

@@ -41,3 +41,17 @@
     ExpiresByType image/webp "access plus 1 year"
     ExpiresByType image/svg+xml "access plus 1 year"
 </IfModule>
+
+# Headers de seguridad: aplicados por Apache a TODAS las peticiones
+# (incluidas las cacheadas que no pasan por PHP)
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set Referrer-Policy "no-referrer-when-downgrade"
+    Header set Access-Control-Allow-Origin "*"
+
+    # CSP restrictivo para SVGs: previene ejecucion de scripts embebidos
+    # Un SVG malicioso con <script> no podra cargar ningun recurso ni ejecutar JS
+    <FilesMatch "\.svg$">
+        Header set Content-Security-Policy "default-src 'none'; style-src 'unsafe-inline'"
+    </FilesMatch>
+</IfModule>

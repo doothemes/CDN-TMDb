@@ -14,8 +14,10 @@ Este CDN expone dos superficies:
 El path solicitado se valida con un regex estricto antes de cualquier operación:
 
 ```php
-preg_match('#^/t/p/([a-z0-9]+)/([a-zA-Z0-9_-]+)\.(jpg|jpeg|png|webp|svg)$#', $path)
+preg_match("#^/t/p/([a-z0-9]+)/([a-zA-Z0-9_-]+)\.($ext_pattern)$#", $path)
 ```
+
+> **Nota**: el patrón `$ext_pattern` se genera dinámicamente desde `MIME_TYPES` en `helpers.php`. Actualmente incluye `jpg|jpeg|png|webp|svg`.
 
 Esto garantiza que:
 
@@ -65,7 +67,7 @@ RewriteRule \.(jpg|jpeg|png|webp|svg)$ - [F,NC,L]
 
 ### CORS
 
-Se envía `Access-Control-Allow-Origin: *` para permitir uso desde cualquier dominio. Si se requiere restringir, modificar el header en la función `serve_file()` de `index.php`.
+Se envía `Access-Control-Allow-Origin: *` para permitir uso desde cualquier dominio. Configurable vía `CORS_ORIGIN` en `.env` (default `*`). Para restringir, establecer el dominio específico. El header también se aplica desde `.htaccess` para archivos servidos directamente por Apache.
 
 ### Caché immutable
 

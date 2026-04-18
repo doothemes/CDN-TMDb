@@ -25,6 +25,7 @@ cdn.dbmvs/
 ├── helpers.php     # Shared functions between index.php and cron.php
 ├── index.php       # Proxy + administrative endpoints
 ├── cron.php        # Scheduled task for automatic cleanup
+├── rotate-token.php # CLI script to securely rotate API_SECRET
 ├── logs/           # Audit and error logs (auto-created)
 │   ├── audit.log   # Log of sensitive operations (cleaner)
 │   ├── audit.log.1 # Old rotations (up to LOG_KEEP_FILES)
@@ -133,6 +134,7 @@ All configuration is managed from the `.env` file at the project root. The `env.
 | `GOOGLEBOT_IPS` | Pool of Googlebot IPs (CSV) to rotate in `X-Forwarded-For` | *(9 hardcoded IPs)* |
 | `LOG_MAX_SIZE_MB` | Max size in MB before automatically rotating a log | `5` |
 | `LOG_KEEP_FILES` | Number of old rotations kept | `5` |
+| `MAX_HEAD_REQUESTS_PER_RUN` | Limit of TMDB HEAD requests per cron run (archival protection) | `500` |
 
 ### Anti-hotlink
 
@@ -345,6 +347,41 @@ With archival protection active, the cron report shows more detail:
 [03:00:01]   Deleted folders:  2
 [03:00:01]   Kept files:       953
 ```
+
+## API_SECRET rotation
+
+CLI script that generates a cryptographically secure token and updates `.env` without web exposure.
+
+```bash
+php /path/to/cdn.dbmvs/rotate-token.php
+```
+
+Example output:
+
+```
+✓ Token rotated successfully
+----------------------------------------------------------------------
+Date:       2026-04-18 03:15:42
+Previous:   MGZ56iQ6...
+New:        664a41f6a5f1d3ecf5f8f05b86e8a450ef0b5f4ab4a1637419c0bdf4bab1c923
+----------------------------------------------------------------------
+```
+
+### Why CLI and not an HTTP endpoint
+
+An HTTP rotation endpoint would require Apache to have write permissions on `.env` — turning the secrets file into a target for any future RCE. The CLI script eliminates that surface:
+
+- **CLI-only**: `php_sapi_name() !== 'cli'` rejects any web invocation with 403
+- **Apache never touches `.env`**: permissions can remain read-only for the web server
+- **No network lockout**: the new token is printed to the terminal, not sent over HTTP
+- **No self-lockout via compromised token**: an attacker with the current token cannot rotate it to lock you out
+
+### Security
+
+- Token generated with `bin2hex(random_bytes(32))` — 256 bits of entropy
+- Atomic write: `.env.tmp` + `rename()` prevents corruption if the operation is interrupted
+- Preserves comments, empty lines and all other variables in the file
+- Logs the rotation in `logs/audit.log` with previews (8 chars) of old and new tokens
 
 ## Logs
 

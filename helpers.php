@@ -14,7 +14,7 @@ require_once __DIR__ . '/env.php';
  * de qué versión tiene desplegada cada instancia.
  * Actualizar manualmente al hacer release.
  */
-const CDN_VERSION = '1.1.0';
+const CDN_VERSION = '1.1.1';
 
 /**
  * Host origen de las imágenes de TMDB.
@@ -181,12 +181,16 @@ function verify_tmdb_availability(string $tmdb_path): int
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
-        CURLOPT_NOBODY         => true,  // HEAD request — no descarga el cuerpo
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_TIMEOUT        => 5,
-        CURLOPT_CONNECTTIMEOUT => 3,
-        CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-        CURLOPT_HTTPHEADER     => ['X-Forwarded-For: ' . $spoof],
+        CURLOPT_NOBODY          => true,  // HEAD request — no descarga el cuerpo
+        CURLOPT_RETURNTRANSFER  => true,
+        CURLOPT_FOLLOWLOCATION  => true,
+        CURLOPT_MAXREDIRS       => 3,
+        CURLOPT_PROTOCOLS       => CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
+        CURLOPT_TIMEOUT         => 5,
+        CURLOPT_CONNECTTIMEOUT  => 3,
+        CURLOPT_USERAGENT       => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+        CURLOPT_HTTPHEADER      => ['X-Forwarded-For: ' . $spoof],
     ]);
     curl_exec($ch);
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);

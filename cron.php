@@ -36,6 +36,14 @@ require_once __DIR__ . '/helpers.php';
 define('MAX_INACTIVE_DAYS', (int) env('MAX_INACTIVE_DAYS', 30));
 
 /**
+ * Límite de HEAD requests a TMDB por ejecución del cron.
+ * Previene que una ejecución con miles de archivos inactivos bloquee el
+ * servidor por horas. Los archivos que excedan el límite se procesan en
+ * la siguiente corrida. Configurar en .env: MAX_HEAD_REQUESTS_PER_RUN
+ */
+define('MAX_HEAD_REQUESTS_PER_RUN', (int) env('MAX_HEAD_REQUESTS_PER_RUN', 500));
+
+/**
  * Directorio raíz del CDN donde se almacenan las imágenes.
  */
 define('STORAGE_DIR', __DIR__);
@@ -69,10 +77,13 @@ $deleted_bytes   = 0;
 $archived_files  = 0;
 $uncertain_files = 0;
 $skipped_files   = 0;
+$deferred_files  = 0;  // Archivos que excedieron el límite de HEADs, se procesarán en la siguiente corrida
+$head_budget     = MAX_HEAD_REQUESTS_PER_RUN;
 
 output("Iniciando limpieza del CDN...");
 output("Eliminando imágenes sin acceso en los últimos " . MAX_INACTIVE_DAYS . " días.");
 output("Fecha límite: " . date('Y-m-d H:i:s', $threshold));
+output("Presupuesto de HEADs a TMDB: " . MAX_HEAD_REQUESTS_PER_RUN);
 output(str_repeat('-', 50));
 
 $iterator = new RecursiveIteratorIterator(
@@ -104,9 +115,22 @@ foreach ($iterator as $item) {
     $last_access = max($item->getATime(), $item->getMTime());
 
     if ($last_access < $threshold) {
+        // Si ya estaba marcado archival, saltamos sin consumir presupuesto de HEADs
+        if (file_exists($path . '.archival')) {
+            $skipped_files++;
+            continue;
+        }
+
+        // Si agotamos el presupuesto, diferimos el resto para la próxima corrida
+        if ($head_budget <= 0) {
+            $deferred_files++;
+            continue;
+        }
+
         $size      = $item->getSize();
         $tmdb_path = derive_tmdb_path($path, STORAGE_DIR);
         $result    = try_safe_delete($path, $tmdb_path);
+        $head_budget--;
 
         if ($result === 'deleted') {
             $deleted_files++;
@@ -116,7 +140,7 @@ foreach ($iterator as $item) {
         } elseif ($result === 'uncertain') {
             $uncertain_files++;
         } else {
-            // 'skipped' — ya estaba marcado archival
+            // 'skipped' — ya estaba marcado archival (no debería entrar aquí por el check de arriba)
             $skipped_files++;
         }
     } else {
@@ -133,6 +157,7 @@ output("Limpieza completada: " . date('Y-m-d H:i:s'));
 output("  Archivos eliminados:  " . $deleted_files . " (" . human_size($deleted_bytes) . " liberados)");
 output("  Archivos archivados:  " . $archived_files . " (protegidos permanentemente)");
 output("  Archivos inciertos:   " . $uncertain_files . " (TMDB no respondió, reintentar)");
+output("  Archivos diferidos:   " . $deferred_files . " (excedieron presupuesto, próxima corrida)");
 output("  Carpetas eliminadas:  " . $deleted_folders);
 output("  Archivos conservados: " . $skipped_files);
 
