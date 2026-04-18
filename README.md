@@ -288,3 +288,40 @@ TMDB, al igual que otros servicios, otorga tratamiento preferencial a los crawle
 | `Last-Modified` | Fecha de descarga | Validación condicional alternativa |
 | `X-Cache` | `HIT` | Indica que la imagen se sirvió desde el CDN |
 | `Access-Control-Allow-Origin` | `*` | Permite uso cross-origin |
+
+## ¿Por qué un CDN propio?
+
+Desplegar tu propio CDN para imágenes de TMDB en lugar de consumirlas directamente desde `image.tmdb.org` ofrece ventajas significativas:
+
+### 1. Control sobre la disponibilidad
+TMDB puede aplicar rate-limiting, cambiar sus URLs, o restringir acceso por región. Un CDN propio desacopla tu plataforma de esas decisiones — tus imágenes ya están en tu infraestructura.
+
+### 2. Rendimiento y caché del navegador
+Servir desde `cdn.tudominio.com` permite headers agresivos (`Cache-Control: immutable`, 1 año) y caché compartido entre tus propios sitios. Cada dominio tiene su propio bucket de caché en el navegador — usar tu CDN unifica las peticiones.
+
+### 3. Independencia del origen
+Si TMDB cae, tiene mantenimiento o bloquea tu IP, tu plataforma sigue funcionando porque las imágenes ya están en disco.
+
+### 4. Anti-hotlinking y control de uso
+Puedes restringir qué dominios usan tus imágenes vía `Referer`. No es posible con el CDN público de TMDB.
+
+### 5. Evasión de bloqueos geográficos
+Algunos países o ISPs bloquean `image.tmdb.org`. Servir desde tu dominio bypasa esos bloqueos.
+
+### 6. Ahorro de ancho de banda en múltiples sitios
+Cuando tienes varios sitios (dbmvs.com, wovie.co, doothemes.com) consumiendo las mismas imágenes, un CDN centralizado evita que cada sitio descargue la misma imagen de TMDB. Una sola descarga sirve a todos.
+
+### 7. Cumplimiento de términos de TMDB
+TMDB tiene límites de peticiones por API key. Con el CDN, una imagen se descarga **una sola vez** sin importar cuántas veces se solicite después. Esto reduce drásticamente la cuota consumida.
+
+### 8. Logs y analítica
+Tienes visibilidad completa de qué imágenes se solicitan, desde qué dominios y con qué frecuencia. Imposible con el CDN de terceros.
+
+### 9. Optimización futura
+Con las imágenes en disco propio, puedes añadir procesamiento: conversión a WebP/AVIF, redimensionado dinámico, compresión agresiva, watermarks — sin tocar el origen.
+
+### 10. Costos predecibles
+El CDN de TMDB es gratuito pero no garantizado. Un servidor propio tiene costos fijos y predecibles, sin sorpresas por cuotas excedidas o términos que cambian.
+
+### 11. Resiliencia ante cambios de política
+TMDB podría, en cualquier momento, requerir autenticación para imágenes, cobrar por tráfico, o restringir uso comercial. Tener las imágenes ya descargadas protege tu negocio de esos cambios.
