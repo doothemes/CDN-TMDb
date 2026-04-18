@@ -160,6 +160,7 @@ Response:
 
 ```json
 {
+    "version": "1.1.0",
     "folders": 3,
     "files": 1240,
     "size": {
@@ -171,6 +172,7 @@ Response:
 
 | Field | Description |
 |-------|-------------|
+| `version` | Current deployed CDN version |
 | `folders` | Total number of folders inside `/t/` |
 | `files` | Total number of stored images |
 | `size.bytes` | Disk space in bytes |

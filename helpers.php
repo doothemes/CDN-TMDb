@@ -7,6 +7,14 @@
  */
 
 /**
+ * Versión actual del CDN.
+ * Se incluye en la respuesta de /get_stats para facilitar el seguimiento
+ * de qué versión tiene desplegada cada instancia.
+ * Actualizar manualmente al hacer release.
+ */
+const CDN_VERSION = '1.1.0';
+
+/**
  * Mapa único de extensiones a tipos MIME.
  * Es la ÚNICA fuente de verdad para extensiones permitidas.
  * El regex de validación y el Content-Type se derivan de aquí.

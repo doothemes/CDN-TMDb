@@ -252,6 +252,7 @@ function get_stats(): array
 
     if (!is_dir($base)) {
         return [
+            'version' => CDN_VERSION,
             'folders' => 0,
             'files'   => 0,
             'size'    => ['bytes' => 0, 'human' => '0 B'],
@@ -281,6 +282,7 @@ function get_stats(): array
     }
 
     return [
+        'version' => CDN_VERSION,
         'folders' => $folders,
         'files'   => $files,
         'size'    => [
