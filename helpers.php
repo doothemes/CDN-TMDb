@@ -86,15 +86,58 @@ function human_size(int $bytes): string
 
 /**
  * Escribe una línea en un archivo de log con timestamp.
- * Útil para auditoría de operaciones sensibles y errores.
+ * Rota el archivo automáticamente si supera el tamaño máximo configurado.
+ *
+ * Formato de rotación:
+ *   audit.log     ← activo
+ *   audit.log.1   ← rotación más reciente
+ *   audit.log.2
+ *   ...
+ *   audit.log.N   ← la más antigua (se elimina al rotar de nuevo)
  *
  * @param string $file Ruta al archivo de log
  * @param string $msg Mensaje a registrar
  */
 function log_line(string $file, string $msg): void
 {
+    $max_bytes = ((int) env('LOG_MAX_SIZE_MB', 5)) * 1024 * 1024;
+    $keep      = (int) env('LOG_KEEP_FILES', 5);
+
+    // Rotar si el archivo supera el tamaño límite
+    if (file_exists($file) && filesize($file) >= $max_bytes) {
+        rotate_log($file, $keep);
+    }
+
     $line = '[' . date('Y-m-d H:i:s') . '] ' . $msg . PHP_EOL;
     @file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+}
+
+/**
+ * Rota un archivo de log: renombra .N → .N+1, el actual → .1.
+ * Elimina las rotaciones que superen el límite de retención.
+ *
+ * @param string $file Ruta al archivo activo
+ * @param int $keep Número máximo de rotaciones a conservar
+ */
+function rotate_log(string $file, int $keep): void
+{
+    // Eliminar la rotación más antigua si existe
+    $oldest = $file . '.' . $keep;
+    if (file_exists($oldest)) {
+        @unlink($oldest);
+    }
+
+    // Desplazar: .N-1 → .N, .N-2 → .N-1, ..., .1 → .2
+    for ($i = $keep - 1; $i >= 1; $i--) {
+        $from = $file . '.' . $i;
+        $to   = $file . '.' . ($i + 1);
+        if (file_exists($from)) {
+            @rename($from, $to);
+        }
+    }
+
+    // El archivo activo se convierte en .1
+    @rename($file, $file . '.1');
 }
 
 /**

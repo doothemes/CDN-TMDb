@@ -91,6 +91,10 @@ Registro histórico de la deuda técnica del proyecto. Documenta tanto lo que se
 **Problema:** GitHub detecta licencias estándar mejor con el nombre convencional.
 **Solución:** `git mv LICENSE.md LICENSE`.
 
+#### 21. Logs sin límite de tamaño
+**Problema:** `audit.log` y `error.log` crecían indefinidamente. En entornos con muchos errores de cURL o limpiezas frecuentes, podían llegar a consumir GBs de disco.
+**Solución:** Rotación automática en `log_line()` — cuando un archivo supera `LOG_MAX_SIZE_MB` (default 5 MB), se rota a `.1`, la antigua `.1` pasa a `.2`, y así sucesivamente hasta `LOG_KEEP_FILES` (default 5). La rotación más antigua se elimina. Espacio máximo garantizado por log: **25 MB**.
+
 ---
 
 ## ⏳ Pendiente

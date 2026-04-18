@@ -25,7 +25,9 @@ cdn.dbmvs/
 ├── cron.php        # Tarea programada para limpieza automática
 ├── logs/           # Logs de auditoría y errores (se crea automáticamente)
 │   ├── audit.log   # Registro de operaciones sensibles (cleaner)
-│   └── error.log   # Errores de cURL y fallos upstream
+│   ├── audit.log.1 # Rotaciones antiguas (hasta LOG_KEEP_FILES)
+│   ├── error.log   # Errores de cURL y fallos upstream
+│   └── error.log.1 # Rotaciones antiguas
 └── t/              # Imágenes almacenadas (se crea automáticamente)
     └── p/
         ├── w500/
@@ -127,6 +129,8 @@ Toda la configuración se gestiona desde el archivo `.env` en la raíz del proye
 | `CORS_ORIGIN` | Valor del header `Access-Control-Allow-Origin` | `*` |
 | `NEGATIVE_CACHE_TTL` | Segundos que se recuerda un 404 de TMDB para evitar repetir peticiones inválidas | `3600` |
 | `GOOGLEBOT_IPS` | Pool de IPs de Googlebot (CSV) para rotar en `X-Forwarded-For` | *(9 IPs hardcodeadas)* |
+| `LOG_MAX_SIZE_MB` | Tamaño máximo en MB antes de rotar un log automáticamente | `5` |
+| `LOG_KEEP_FILES` | Número de rotaciones antiguas que se conservan | `5` |
 
 ### Anti-hotlink
 
@@ -276,6 +280,31 @@ Para evitar rate-limiting y bloqueos por parte del CDN de TMDB, cada petición a
 - **Header `X-Forwarded-For`** con la IP seleccionada — respetado por muchos CDNs y proxies reversos como IP de origen
 
 TMDB, al igual que otros servicios, otorga tratamiento preferencial a los crawlers de Google (whitelisted) para permitir indexación. Aprovechar esa identidad reduce drásticamente la probabilidad de ser rate-limited durante descargas masivas de imágenes.
+
+## Logs
+
+El CDN mantiene dos logs separados en `/logs/`:
+
+| Archivo | Contenido |
+|---------|-----------|
+| `audit.log` | Ejecuciones de `POST /cleaner` con IP, modo y resultado |
+| `error.log` | Fallos de cURL al descargar de TMDB (timeouts, DNS, etc.) |
+
+### Rotación automática
+
+Cuando un log alcanza `LOG_MAX_SIZE_MB` (default 5 MB), se rota automáticamente:
+
+```
+audit.log      ← archivo activo
+audit.log.1    ← rotación más reciente
+audit.log.2
+...
+audit.log.5    ← la más antigua
+```
+
+Al rotar de nuevo, `audit.log.5` se elimina, el resto se desplaza y el activo pasa a `.1`. El límite de rotaciones se configura con `LOG_KEEP_FILES`.
+
+Con defaults (5 MB × 5 rotaciones), el espacio máximo por log es **25 MB**.
 
 ## Seguridad
 
