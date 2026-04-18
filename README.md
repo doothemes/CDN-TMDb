@@ -1,5 +1,7 @@
 # CDN Proxy — TMDB Images
 
+> 🇪🇸 **Español** · [🇬🇧 English](README.en.md)
+
 Proxy inverso con almacenamiento permanente para imágenes de [The Movie Database](https://www.themoviedb.org/). Descarga las imágenes desde `image.tmdb.org`, las almacena en disco y las sirve desde tu propio dominio.
 
 Después de la primera descarga, Apache sirve las imágenes como archivos estáticos — PHP no interviene.
