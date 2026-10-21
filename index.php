@@ -111,13 +111,11 @@ if (file_exists($negative_marker) && (time() - filemtime($negative_marker)) < NE
 // ─── Descarga desde TMDB ────────────────────────────────────────
 
 $remote_url = TMDB_IMAGE_HOST . $path;
-$ips        = googlebot_ips();
-$spoof_ip   = $ips[array_rand($ips)];
 
 /**
- * Configuramos cURL para descargar la imagen de TMDB con identidad de Googlebot.
- * El User-Agent + X-Forwarded-For simulan un crawler de Google, reduciendo
- * la probabilidad de rate-limiting por parte del CDN de TMDB.
+ * Configuramos cURL para descargar la imagen de TMDB identificándonos con
+ * un User-Agent propio (CDN_USER_AGENT). No hace falta más: cada imagen se
+ * descarga una sola vez y las siguientes peticiones las sirve Apache.
  */
 $ch = curl_init($remote_url);
 curl_setopt_array($ch, [
@@ -128,10 +126,9 @@ curl_setopt_array($ch, [
     CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
     CURLOPT_TIMEOUT         => 15,
     CURLOPT_CONNECTTIMEOUT  => 5,
-    CURLOPT_USERAGENT       => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    CURLOPT_USERAGENT       => CDN_USER_AGENT,
     CURLOPT_HTTPHEADER      => [
         'Accept: image/webp,image/*,*/*;q=0.8',
-        'X-Forwarded-For: ' . $spoof_ip,
     ],
 ]);
 
@@ -375,22 +372,37 @@ function cleaner(): array
 
         $path = $item->getPathname();
 
-        // Los marcadores mismos se eliminan junto con su archivo padre
-        if (str_ends_with($path, '.404') || str_ends_with($path, '.archival')) {
+        // Marcadores de negative cache: se eliminan según el modo
+        if (str_ends_with($path, '.404')) {
             if ($mode === 'all' || $item->getMTime() < $threshold) {
                 @unlink($path);
             }
             continue;
         }
 
+        // Marcadores archival: sólo se eliminan junto con su imagen (más abajo)
+        // o cuando quedaron huérfanos. Borrarlos por separado dejaría la imagen
+        // sin protección, o incluso la eliminaría en esta misma pasada si el
+        // iterador visita el marcador antes que la imagen.
+        if (str_ends_with($path, '.archival')) {
+            if (!file_exists(substr($path, 0, -strlen('.archival')))) {
+                @unlink($path);
+            }
+            continue;
+        }
+
         // Respetar archival: si hay marcador, preservar a menos que force=true
-        if (!$force && file_exists($path . '.archival')) {
+        $marker = $path . '.archival';
+        if (!$force && file_exists($marker)) {
             $preserved_archival++;
             continue;
         }
 
         if ($mode === 'all' || $item->getMTime() < $threshold) {
             @unlink($path);
+            if (file_exists($marker)) {
+                @unlink($marker);
+            }
             $deleted_files++;
         }
     }

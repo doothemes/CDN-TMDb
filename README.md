@@ -9,14 +9,14 @@ Después de la primera descarga, Apache sirve las imágenes como archivos estát
 ## Requisitos
 
 - PHP 8.1+
-- Apache con `mod_rewrite` y `mod_expires`
+- Apache con `mod_rewrite` y `mod_expires` (`mod_headers` recomendado)
 - Extensión `curl` habilitada
 
 ## Estructura
 
 ```
 cdn.dbmvs/
-├── .htaccess       # Rewrite rules + cache + anti-hotlink
+├── .htaccess       # Rewrite rules + bloqueo de archivos sensibles + cache + anti-hotlink
 ├── .env.example    # Template de configuración
 ├── .env            # Variables de entorno (no se commitea)
 ├── .gitattributes  # Normaliza line endings y controla exports
@@ -67,7 +67,23 @@ https://cdn.dbmvs.io/t/p/w500/kqjL17yufvn9OVLyXYpvtyrFfak.jpg
 
 ## .htaccess
 
-El archivo `.htaccess` tiene tres bloques funcionales:
+El archivo `.htaccess` tiene cuatro bloques funcionales:
+
+### Bloqueo de archivos sensibles
+
+Como Apache sirve tal cual cualquier archivo que exista en disco, todo lo que no es una imagen se bloquea con `403 Forbidden` antes de llegar a la regla principal:
+
+```apache
+RewriteRule (^|/)\.(?!well-known(/|$)) - [F,NC,L]
+RewriteRule ^logs(/|$) - [F,NC,L]
+RewriteRule \.(tmp|lock)$ - [F,NC,L]
+```
+
+| Regla | Qué protege |
+|-------|-------------|
+| Dotfiles y carpetas ocultas | `.env` (contiene `API_SECRET`), `.env.tmp` de `rotate-token.php`, `.git/` si se instaló con `git clone`. Se exceptúa `.well-known/` para que Let's Encrypt pueda renovar el certificado |
+| `logs/` | `audit.log`, `error.log` y sus rotaciones, que registran IPs |
+| `*.tmp` y `*.lock` | Temporales de la escritura atómica y `cron.lock` |
 
 ### Rewrite (mod_rewrite)
 
@@ -119,7 +135,11 @@ Caché de **1 año** para todos los tipos de imagen que maneja el CDN. Es seguro
    MAX_INACTIVE_DAYS=30
    ```
 4. Verificar que Apache tenga `mod_rewrite` y `mod_expires` habilitados
-5. (Opcional) Programar `cron.php` en crontab para limpieza automática
+5. Comprobar que los archivos sensibles no se pueden descargar (debe responder `403`):
+   ```bash
+   curl -I https://cdn.tudominio.com/.env
+   ```
+6. (Opcional) Programar `cron.php` en crontab para limpieza automática
 
 ## Configuración (.env)
 
@@ -131,7 +151,6 @@ Toda la configuración se gestiona desde el archivo `.env` en la raíz del proye
 | `MAX_INACTIVE_DAYS` | Días máximos sin acceso antes de que el cron elimine una imagen | `30` |
 | `CORS_ORIGIN` | Valor del header `Access-Control-Allow-Origin` | `*` |
 | `NEGATIVE_CACHE_TTL` | Segundos que se recuerda un 404 de TMDB para evitar repetir peticiones inválidas | `3600` |
-| `GOOGLEBOT_IPS` | Pool de IPs de Googlebot (CSV) para rotar en `X-Forwarded-For` | *(9 IPs hardcodeadas)* |
 | `LOG_MAX_SIZE_MB` | Tamaño máximo en MB antes de rotar un log automáticamente | `5` |
 | `LOG_KEEP_FILES` | Número de rotaciones antiguas que se conservan | `5` |
 | `MAX_HEAD_REQUESTS_PER_RUN` | Límite de HEADs a TMDB por ejecución del cron (archival protection) | `500` |
@@ -162,7 +181,7 @@ Respuesta:
 
 ```json
 {
-    "version": "1.1.0",
+    "version": "1.2.0",
     "folders": 3,
     "files": 1240,
     "archival": 5,
@@ -186,7 +205,7 @@ Respuesta:
 
 Ejecuta limpieza de imágenes almacenadas. Soporta dos modos:
 
-**Limpieza total** — elimina todas las imágenes y carpetas:
+**Limpieza total** — elimina todas las imágenes y carpetas, excepto las protegidas como archival:
 
 ```bash
 curl -X POST \
@@ -292,15 +311,19 @@ Cada ejecución genera un reporte con timestamp para los logs:
 - Sólo se puede ejecutar desde CLI (`php_sapi_name() === 'cli'`). Si se intenta acceder vía web, devuelve `403 Forbidden`
 - No requiere API key porque el acceso al servidor ya implica autorización
 
-## Identidad de Googlebot
+## Identificación ante TMDB
 
-Para evitar rate-limiting y bloqueos por parte del CDN de TMDB, cada petición a `image.tmdb.org` se envía simulando ser un crawler de Google. Esta estrategia combina:
+Cada petición a `image.tmdb.org` (descargas y los `HEAD` de la protección archival) se identifica con un User-Agent propio:
 
-- **User-Agent de Googlebot**: `Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)`
-- **Pool de 9 IPs de Googlebot** (`66.249.66.x`) rotadas aleatoriamente en cada petición
-- **Header `X-Forwarded-For`** con la IP seleccionada — respetado por muchos CDNs y proxies reversos como IP de origen
+```
+CDN-TMDb/1.2.0 (+https://github.com/doothemes/CDN-TMDb)
+```
 
-TMDB, al igual que otros servicios, otorga tratamiento preferencial a los crawlers de Google (whitelisted) para permitir indexación. Aprovechar esa identidad reduce drásticamente la probabilidad de ser rate-limited durante descargas masivas de imágenes.
+Lleva el nombre del proyecto, la versión (`CDN_VERSION`) y la URL del repositorio, para que TMDB sepa quién hace las peticiones. Se define en la constante `CDN_USER_AGENT` de `helpers.php`.
+
+El volumen de peticiones lo controla la propia caché en disco: cada imagen se descarga **una sola vez** y a partir de ahí la sirve Apache sin contactar a TMDB. El negative cache evita repetir peticiones por imágenes inexistentes y `MAX_HEAD_REQUESTS_PER_RUN` limita los `HEAD` del cron.
+
+> Hasta la v1.1.1 el CDN se hacía pasar por Googlebot (User-Agent de Google e IPs falsas en `X-Forwarded-For`). Se eliminó en la v1.2.0: `X-Forwarded-For` no cambia la IP real que ve TMDB, y un "Googlebot" que no sale de una IP de Google es justo lo que los CDNs detectan y bloquean como bot falso.
 
 ## Protección archival
 
@@ -410,6 +433,7 @@ Con defaults (5 MB × 5 rotaciones), el espacio máximo por log es **25 MB**.
 
 ## Seguridad
 
+- **Archivos sensibles bloqueados**: `.env`, `.git/`, `logs/`, temporales y locks responden `403` desde `.htaccess`
 - **Validación de paths**: regex estricto que sólo acepta `/t/p/{size}/{hash}.{ext}` — previene path traversal y SSRF
 - **Extensiones limitadas**: derivadas de `MIME_TYPES` en `helpers.php` (fuente única)
 - **Doble validación de contenido**: header `Content-Type` + inspección binaria con `finfo`
@@ -448,14 +472,14 @@ Si TMDB cae, tiene mantenimiento o bloquea tu IP, tu plataforma sigue funcionand
 ### 4. Anti-hotlinking y control de uso
 Puedes restringir qué dominios usan tus imágenes vía `Referer`. No es posible con el CDN público de TMDB.
 
-### 5. Evasión de bloqueos geográficos
-Algunos países o ISPs bloquean `image.tmdb.org`. Servir desde tu dominio bypasa esos bloqueos.
+### 5. Disponibilidad donde `image.tmdb.org` no carga
+Algunas redes, ISPs o países bloquean `image.tmdb.org`. Como tus visitantes descargan las imágenes desde tu dominio, las siguen viendo aunque no puedan llegar a TMDB.
 
 ### 6. Ahorro de ancho de banda en múltiples sitios
 Cuando tienes varios sitios (dbmvs.com, wovie.co, doothemes.com) consumiendo las mismas imágenes, un CDN centralizado evita que cada sitio descargue la misma imagen de TMDB. Una sola descarga sirve a todos.
 
-### 7. Cumplimiento de términos de TMDB
-TMDB tiene límites de peticiones por API key. Con el CDN, una imagen se descarga **una sola vez** sin importar cuántas veces se solicite después. Esto reduce drásticamente la cuota consumida.
+### 7. Menos carga sobre TMDB
+Con el CDN, una imagen se descarga de TMDB **una sola vez** sin importar cuántas veces se solicite después. Tus visitantes no generan tráfico hacia `image.tmdb.org`, sólo tu servidor y sólo la primera vez.
 
 ### 8. Logs y analítica
 Tienes visibilidad completa de qué imágenes se solicitan, desde qué dominios y con qué frecuencia. Imposible con el CDN de terceros.

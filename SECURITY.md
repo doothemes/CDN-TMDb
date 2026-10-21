@@ -54,6 +54,18 @@ if (!hash_equals(API_SECRET, $key)) {
 }
 ```
 
+### Bloqueo de archivos sensibles
+
+Apache sirve directamente cualquier archivo que exista en disco (es lo que hace rápido al CDN), así que el `.htaccess` bloquea con `403` todo lo que no es una imagen antes de esa regla:
+
+```apache
+RewriteRule (^|/)\.(?!well-known(/|$)) - [F,NC,L]
+RewriteRule ^logs(/|$) - [F,NC,L]
+RewriteRule \.(tmp|lock)$ - [F,NC,L]
+```
+
+Cubre `.env` y `.env.tmp`, la carpeta `.git/` cuando se instala con `git clone`, los logs con sus rotaciones, los temporales de escritura atómica y `cron.lock`. La configuración por defecto de Apache sólo protege `.ht*`.
+
 ### Anti-hotlink (configurable)
 
 El `.htaccess` incluye reglas para restringir qué dominios pueden referenciar las imágenes del CDN. Cuando se activa, cualquier petición con un `Referer` no autorizado recibe `403 Forbidden`.
@@ -88,17 +100,20 @@ Las imágenes se sirven con `Cache-Control: public, max-age=2592000, immutable`.
 | Ejecuciones concurrentes del cron | `flock()` sobre `cron.lock` — sólo una instancia a la vez |
 | Eliminación sin trazabilidad | `logs/audit.log` registra IP, modo y resultado de cada `/cleaner` |
 | Credenciales expuestas en repo | `.env` excluido vía `.gitignore`, sólo se commitea `.env.example` sin valores reales |
+| Descarga web de `.env`, `.git/` o logs | Reglas `[F]` en `.htaccess` antes de la regla que sirve archivos existentes |
+| Pérdida de imágenes archival al limpiar | `/cleaner` sólo borra un marcador `.archival` junto con su imagen (con `force`) o si quedó huérfano |
 | MIME sniffing del navegador | Header `X-Content-Type-Options: nosniff` |
 | XSS vía SVG malicioso | El CDN sólo almacena SVGs descargados de TMDB (origen confiable), no acepta uploads de usuarios |
 
 ## Recomendaciones para producción
 
-1. **Configurar `API_SECRET` en `.env`** — sin esta clave los endpoints admin rechazan todas las peticiones
-2. **Activar anti-hotlink** — descomentar las reglas en `.htaccess` y listar sólo los dominios autorizados
-3. **HTTPS obligatorio** — configurar redirección HTTP → HTTPS a nivel de servidor
-4. **Monitorear disco** — ejecutar `/get_stats` periódicamente y programar limpiezas con `/cleaner`
-5. **Rate limiting** — considerar implementar límite de peticiones a nivel de servidor (mod_ratelimit o firewall) para prevenir abuso del proxy
-6. **Restringir CORS** — si sólo se usa desde dominios propios, reemplazar `*` por los dominios específicos
+1. **Configurar `API_SECRET` en `.env`** — sin esta clave los endpoints admin rechazan todas las peticiones. Generarla con `php rotate-token.php`
+2. **Comprobar que `/.env` responde `403`** — si alguna vez respondió `200`, el token estuvo expuesto: rotarlo con `php rotate-token.php`
+3. **Activar anti-hotlink** — descomentar las reglas en `.htaccess` y listar sólo los dominios autorizados
+4. **HTTPS obligatorio** — configurar redirección HTTP → HTTPS a nivel de servidor
+5. **Monitorear disco** — ejecutar `/get_stats` periódicamente y programar limpiezas con `/cleaner`
+6. **Rate limiting** — considerar implementar límite de peticiones a nivel de servidor (mod_ratelimit o firewall) para prevenir abuso del proxy
+7. **Restringir CORS** — si sólo se usa desde dominios propios, reemplazar `*` por los dominios específicos
 
 ## Reportar vulnerabilidades
 

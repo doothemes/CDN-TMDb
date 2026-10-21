@@ -14,12 +14,18 @@ require_once __DIR__ . '/env.php';
  * de qué versión tiene desplegada cada instancia.
  * Actualizar manualmente al hacer release.
  */
-const CDN_VERSION = '1.1.1';
+const CDN_VERSION = '1.2.0';
 
 /**
  * Host origen de las imágenes de TMDB.
  */
 const TMDB_IMAGE_HOST = 'https://image.tmdb.org';
+
+/**
+ * User-Agent con el que el CDN se identifica ante TMDB.
+ * Nombre, versión y URL del proyecto, para que TMDB sepa quién descarga.
+ */
+const CDN_USER_AGENT = 'CDN-TMDb/' . CDN_VERSION . ' (+https://github.com/doothemes/CDN-TMDb)';
 
 /**
  * Mapa único de extensiones a tipos MIME.
@@ -156,28 +162,14 @@ function rotate_log(string $file, int $keep): void
 }
 
 /**
- * Obtiene el pool de IPs de Googlebot desde .env o usa el default hardcodeado.
- *
- * @return array Lista de IPs
- */
-function googlebot_ips(): array
-{
-    $csv = env('GOOGLEBOT_IPS', '66.249.66.1,66.249.66.12,66.249.66.33,66.249.66.45,66.249.66.68,66.249.66.79,66.249.66.82,66.249.66.91,66.249.66.104');
-    return array_filter(array_map('trim', explode(',', $csv)));
-}
-
-/**
  * Verifica si una imagen sigue disponible en TMDB mediante HEAD request.
- * Usa identidad de Googlebot para evitar rate-limiting.
  *
  * @param string $tmdb_path Path relativo (ej: /t/p/w500/abc.jpg)
  * @return int Código HTTP de la respuesta (200, 404, 429, 503, etc.) o 0 si falla la conexión
  */
 function verify_tmdb_availability(string $tmdb_path): int
 {
-    $ips   = googlebot_ips();
-    $spoof = $ips[array_rand($ips)];
-    $url   = TMDB_IMAGE_HOST . $tmdb_path;
+    $url = TMDB_IMAGE_HOST . $tmdb_path;
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
@@ -189,8 +181,7 @@ function verify_tmdb_availability(string $tmdb_path): int
         CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTPS,
         CURLOPT_TIMEOUT         => 5,
         CURLOPT_CONNECTTIMEOUT  => 3,
-        CURLOPT_USERAGENT       => 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-        CURLOPT_HTTPHEADER      => ['X-Forwarded-For: ' . $spoof],
+        CURLOPT_USERAGENT       => CDN_USER_AGENT,
     ]);
     curl_exec($ch);
     $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);

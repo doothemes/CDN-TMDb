@@ -13,6 +13,28 @@ Registro histórico de la deuda técnica del proyecto. Documenta tanto lo que se
 
 ---
 
+## ✅ Resuelto en v1.2.0
+
+Hallazgos reportados al revisar el contrato con el plugin Dbmovies y su guía de despliegue.
+
+### 🔴 Crítico
+
+#### B-1. `.env`, `.git/` y `logs/` descargables desde el navegador
+**Problema:** La regla `RewriteCond %{REQUEST_FILENAME} !-f` hace que Apache sirva tal cual cualquier archivo que exista, y el `.htaccess` no bloqueaba nada más. `GET /.env` entregaba `API_SECRET`, `/logs/audit.log` las IPs de quien ejecutó `/cleaner`, y una instalación con `git clone` exponía `/.git/`. La configuración por defecto de Apache sólo niega `.ht*`.
+**Solución:** Tres `RewriteRule ... [F,L]` al inicio del bloque `mod_rewrite`: dotfiles y carpetas ocultas (salvo `.well-known/` para Let's Encrypt), `logs/`, y archivos `*.tmp` / `*.lock`. Se usa `mod_rewrite` (ya obligatorio) en lugar de `<FilesMatch>` + `Require`, porque `Require` en `.htaccess` necesita `AllowOverride AuthConfig` y sin él tumba el sitio con un 500.
+
+#### B-2. `/cleaner` en modo `all` eliminaba marcadores `.archival` sin `force`
+**Problema:** Los marcadores `.archival` se borraban igual que los `.404`, sin mirar `force`. Si el iterador visitaba el marcador antes que la imagen, la imagen archival se eliminaba en la misma pasada (pérdida irreversible). Si lo visitaba después, la imagen sobrevivía pero sin protección para la siguiente limpieza. El orden de `readdir` en ext4 es efectivamente aleatorio, así que el botón «Clear cache» del plugin podía borrar cerca de la mitad de las imágenes archival.
+**Solución:** Un marcador `.archival` sólo se elimina junto con su imagen (cuando `force` la borra) o si quedó huérfano. Los `.404` mantienen su comportamiento.
+
+### 🟠 Alto
+
+#### B-3. Suplantación de Googlebot ante TMDB
+**Problema:** Las descargas y los `HEAD` usaban el User-Agent de Googlebot y una IP de Google inventada en `X-Forwarded-For`. `X-Forwarded-For` no cambia la IP real que ve TMDB, y un Googlebot que no sale de una IP de Google es una señal clásica de bot falso: arriesga bloquear la IP del servidor en lugar de evitarlo. El README además lo presentaba junto a un supuesto «cumplimiento de términos de TMDB».
+**Solución:** User-Agent propio `CDN-TMDb/{versión} (+url del repo)` en la constante `CDN_USER_AGENT`, sin `X-Forwarded-For`. Eliminados `googlebot_ips()` y la variable `GOOGLEBOT_IPS` (si sigue en un `.env` existente, se ignora). El volumen de peticiones ya lo controlan la caché en disco, el negative cache y `MAX_HEAD_REQUESTS_PER_RUN`. Reformuladas en el README las secciones 5 y 7 de «¿Por qué un CDN propio?». Deja obsoleto el ítem #11.
+
+---
+
 ## ✅ Resuelto en v1.1.1 (patch de auditoría externa)
 
 Hallazgos reportados por auditoría automatizada con GitHub Copilot.
@@ -112,6 +134,7 @@ Hallazgos reportados por auditoría automatizada con GitHub Copilot.
 #### 11. IPs de Googlebot hardcodeadas
 **Problema:** El pool de 9 IPs `66.249.66.x` estaba en código. Google rota sus rangos periódicamente.
 **Solución:** Variable `GOOGLEBOT_IPS` en `.env` como CSV. El default sigue siendo el pool hardcodeado.
+**Nota (v1.2.0):** Obsoleto — la suplantación de Googlebot se eliminó por completo (ver B-3).
 
 #### 12. Content-Type de TMDB confiado ciegamente
 **Problema:** Se confiaba en el header `Content-Type` de TMDB sin verificar el contenido real.
@@ -181,4 +204,4 @@ Hallazgos reportados por auditoría automatizada con GitHub Copilot.
 
 ---
 
-**Última actualización:** 2026-04-17 (v1.1.0)
+**Última actualización:** 2026-10-21 (v1.2.0)

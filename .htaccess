@@ -2,6 +2,19 @@
     RewriteEngine On
 
     # =================================================================
+    # ARCHIVOS SENSIBLES (bloqueo de acceso web)
+    # =================================================================
+    # La regla final sirve tal cual cualquier archivo que exista en disco,
+    # asi que todo lo que no sea una imagen se bloquea antes con 403:
+    #   - Dotfiles y carpetas ocultas: .env, .env.tmp, .git/, .gitignore
+    #     (excepto .well-known/, que usa Let's Encrypt para renovar SSL)
+    #   - logs/: audit.log, error.log y sus rotaciones (contienen IPs)
+    #   - Temporales de escritura atomica (*.tmp) y cron.lock
+    RewriteRule (^|/)\.(?!well-known(/|$)) - [F,NC,L]
+    RewriteRule ^logs(/|$) - [F,NC,L]
+    RewriteRule \.(tmp|lock)$ - [F,NC,L]
+
+    # =================================================================
     # PROTECCION ANTI-HOTLINK (Bloquear dominios no autorizados)
     # =================================================================
     # Descomenta las reglas cuando vayas a produccion.
